@@ -12,11 +12,11 @@ maintainer:          andrewgrantbrooks@gmail.com
 -- copyright:           
 category:            Concurrency
 build-type:          Simple
-extra-source-files:  ChangeLog.md
+extra-source-files:  
 cabal-version:       >=1.10
 
 library
-  -- exposed-modules:     
+  exposed-modules:     Control.Concurrency.Phaser
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.9 && <4.10
