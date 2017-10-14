@@ -1,5 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
-
+{-# LANGUAGE MultiWayIf   #-}
 module Phaser
   ( newPhaser
   , newIntPhaser
@@ -9,34 +9,35 @@ module Phaser
   , register
   , unregister
   , await
+  , awaitFor
+  , awaitUntil
   , Phaser () )
 where
 
 import Control.Concurrent.MVar
-import Control.Monad           ( when )
+import Control.Monad           ( join
+                               , liftM
+                               , when )
 import Data.IORef
 
 {-
-FIXME: This needs to be made exception-safe!
-TODO: Add support for tree-structured phasers.
-TODO: Elaborate in documentation.
-TODO: Don't import everything from the imported modules.
+FIXME: Guarantee exception-safety.
+TODO: Add support for tree-structured phasers to reduce lock contention.
+TODO: Add more documentation.
+TODO: Don't import everything from imported modules.
 -}
 
 {-|
 A "Phaser" acts as a reusable barrier with an adjustable number of threads
-that wait on it.
+that are synchronized by it.
 -}
 data Phaser p = Phaser
-  { _phase      :: MVar p
-  , _registered :: MVar Int
-  , _arrived    :: MVar Int
-  , _waitOn     :: MVar ()  -- ^ Synchronization object for waiting threads.
+  { _phase :: MVar p -- ^ Phase we're currently on
+  , _registered :: MVar Int -- ^ Number of threads registered.
+  , _arrived :: MVar Int -- ^ Number of threads arrived.
+  , _awoken :: MVar Int -- ^ Number of threads awoken.
+  , _awoken_needed :: MVar Int -- ^ Number of threads that need to be awoken.
   }
-
--- | Determine how many parties have arrived at the @Phaser@.
-arrived :: Phaser p -> IO Int
-arrived = (readMVar . _arrived)
 
 -- | Read the "phase" of the Phaser. Once all threads advance, the phase
 --   increases.
@@ -46,7 +47,11 @@ phase = (readMVar . _phase)
 -- | Determine how many parties / threads are currently registered with the
 --   @Phaser@.
 registered :: Phaser p -> IO Int
-registered = (readMVar . _registered)
+registered ph = readMVar (_registered ph)
+
+-- | Determine how many parties have arrived at the @Phaser@.
+arrived :: Phaser p -> IO Int
+arrived ph = readMVar (_arrived ph)
 
 -- | Create a new @Phaser@.
 newPhaser :: Enum p
@@ -58,46 +63,110 @@ newPhaser p i = Phaser
   <*> (newMVar i)
   <*> (newMVar 0)
   <*> (newEmptyMVar)
+  <*> (newEmptyMVar)
 
 -- | Create a new @Phaser@ which uses an Int to track @phase@, starting at 0.
 newIntPhaser :: Int -> IO (Phaser Int)
 newIntPhaser = newPhaser 0
 
 -- | Register a thread with a @Phaser@.
-register :: Phaser p -> IO ()
-register r = modifyMVar_ (_registered r) (return . (+1))
+register :: Enum p => Phaser p -> IO ()
+register ph = modifyMVar_ (_registered ph) (return . (+1))
 
 -- | Unregister a thread from a @Phaser@. Do not permit the number of registered
---   threads to drop below zero. If the number of registered parties would become
---   the number of parties arrived, then advance to the next phase.
+--   threads to drop below zero. If the thread unregistering would be the last to
+--   arrive, then advance all threads waiting on the @Phaser@.
 unregister :: Enum p => Phaser p -> IO ()
-unregister ph = do
-  !n_registered <- registered ph
-  !n_arrived    <- arrived ph
-  modifyMVar_ (_registered ph) (\i -> return $ max 0 (i - 1))
-  when (n_arrived >= n_registered - 1) $
-    advance ph
+unregister ph =
+  withMVar (_registered ph) (\n_registered ->
+    withMVar (_arrived ph)  (\n_arrived -> do
+      let new_registered = max 0 (n_registered - 1)
+      if (n_arrived >= n_registered - 1) then
+        advance new_registered ph
+      else do
+        putMVar (_arrived ph)    n_arrived
+        putMVar (_registered ph) new_registered
+    )
+  )
+
+-- | Advance a @Phaser@ to the next phase, once all threads have arrived,
+-- | and initialize the "awoken" counter to start waking up blocked threads.
+-- | For internal use only!
+advance :: Enum p => Int -> Phaser p -> IO ()
+advance n_registered ph
+  | n_registered <= 1 = nextPhase ph >> reset
+  | otherwise = do
+      putMVar (_awoken_needed ph) (n_registered)
+      putMVar (_awoken ph) (1)
+      nextPhase ph
+  where
+    reset = putMVar (_arrived ph) 0
 
 -- | Wait at the phaser until all threads arrive. Once all threads have arrived,
---   the @Phaser@ will advance.
+-- | the @Phaser@ proceeds to the next phase, and all threads are unblocked.
 await :: Enum p => Phaser p -> IO ()
-await ph = undefined -- TODO: Left off here
+await ph =
+  withMVar (_registered ph) (\n_registered ->
+    withMVar (_arrived ph) (\n_arrived -> do
+      let is_last_arriving = n_arrived >= n_registered - 1
+      if is_last_arriving then do
+        advance n_registered ph
+      else do
+        putMVar (_arrived ph)    (n_arrived + 1)
+        putMVar (_registered ph) (n_registered)
+        waitToAwake n_registered ph
+    )
+  )
 
--- | Reset the arrival count of a @Phaser@, increase its @phase@, and awaken
---   all threads sleeping on the @Phaser@. For internal use only.
-advance :: Enum p => Phaser p -> IO ()
-advance ph =  swapMVar    (_arrived ph) 0
-           >> modifyMVar_ (_phase ph)   (return . succ)
-           >> putMVar     (_waitOn ph)  ()
+-- | @await@ a @Phaser@ for a specified number of phases.
+awaitFor
+  :: Enum p
+  => Int -- ^ Number of phases to wait for
+  -> Phaser p -- ^ Phaser to wait on
+  -> IO ()
+awaitFor 0 ph = return ()
+awaitFor i ph = await ph >> awaitFor (i - 1) ph
 
--- | Wait on a @Phaser@ until it becomes available. For internal use only.
-sleepOn :: Phaser p -> IO ()
-sleepOn ph = let cond = _waitOn ph in
-  readMVar    cond >>
-  tryTakeMVar cond >>
-  return ()
-{-
-If a putMVar occurs after a readMVar, all threads blocked on readMVar are
-guaranteed to run before the putMVar ever occurs. For this reason, we can be
-certain that all sleeping threads will awaken.
--}
+-- | @await@ a @Phaser@ until it reaches a certain phase.
+awaitUntil
+  :: Enum p
+  => Eq p
+  => p        -- ^ Phase to wait for
+  -> Phaser p -- ^ @Phaser@ to wait on
+  -> IO ()
+awaitUntil target_phase phaser =
+  phase phaser >>= (\current_phase -> do
+    when (current_phase /= target_phase) $
+      await phaser >> awaitUntil target_phase phaser
+    return ()
+  )
+
+-- | The "exit side" of @await@, which prevents threads from arriving at the
+-- | @Phaser@ until all have successfully awoken.
+-- | For internal use only!
+waitToAwake
+  :: Enum p
+  => Int      -- ^ Number of parties registered at the time that threads awake.
+  -> Phaser p -- ^ Phaser we're awaking on.
+  -> IO ()
+waitToAwake n_registered ph
+  | n_registered <= 1 = return ()
+  | otherwise = do
+      withMVar (_awoken ph) (\n_awake ->
+        withMVar (_awoken_needed ph) (\n_needed -> do
+          let is_last_awaking = n_awake == n_needed - 1
+          if is_last_awaking then do
+            putMVar (_arrived ph)    (0)
+            putMVar (_registered ph) (n_registered)
+          else do
+            putMVar (_awoken ph)        (n_awake + 1)
+            putMVar (_awoken_needed ph) (n_needed)
+         )
+       )
+{-# INLINE waitToAwake #-}
+
+-- | Advance a @Phaser@ to the next phase.
+-- | For internal use only!
+nextPhase :: Enum p => Phaser p -> IO ()
+nextPhase ph = modifyMVar_ (_phase ph) (return . succ)
+{-# INLINE nextPhase #-}
