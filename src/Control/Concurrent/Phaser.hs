@@ -80,8 +80,8 @@ register ph = modifyMVar_ (_registered ph) (return . (+1))
 --   arrive, then advance all threads waiting on the @Phaser@.
 unregister :: Enum p => Phaser p -> IO ()
 unregister ph =
-  withMVar (_registered ph) (\n_registered ->
-    withMVar (_arrived ph)  (\n_arrived -> do
+  takingMVar (_registered ph) (\n_registered ->
+    takingMVar (_arrived ph)  (\n_arrived -> do
       let new_registered = max 0 (n_registered - 1)
       if (n_arrived >= n_registered - 1) then
         advance new_registered ph
@@ -108,8 +108,8 @@ advance n_registered ph
 -- | the @Phaser@ proceeds to the next phase, and all threads are unblocked.
 await :: Enum p => Phaser p -> IO ()
 await ph =
-  withMVar (_registered ph) (\n_registered ->
-    withMVar (_arrived ph) (\n_arrived -> do
+  takingMVar (_registered ph) (\n_registered ->
+    takingMVar (_arrived ph) (\n_arrived -> do
       let is_last_arriving = n_arrived >= n_registered - 1
       if is_last_arriving then do
         advance n_registered ph
@@ -154,8 +154,8 @@ waitToAwake
 waitToAwake n_registered ph
   | n_registered <= 1 = return ()
   | otherwise = do
-      withMVar (_awoken ph) (\n_awake ->
-        withMVar (_awoken_needed ph) (\n_needed -> do
+      takingMVar (_awoken ph) (\n_awake ->
+        takingMVar (_awoken_needed ph) (\n_needed -> do
           let is_last_awaking = n_awake == n_needed - 1
           if is_last_awaking then do
             putMVar (_arrived ph)    (0)
@@ -172,3 +172,10 @@ waitToAwake n_registered ph
 nextPhase :: Enum p => Phaser p -> IO ()
 nextPhase ph = modifyMVar_ (_phase ph) (return . succ)
 {-# INLINE nextPhase #-}
+
+-- XXX: Once we add exception safety, we'll get rid of this.
+-- For the time being, it's just a little sugar that helps us "bracket"
+-- parts of the code so that adding exception safety won't require any
+-- dramatic restructuring.
+takingMVar :: MVar a -> (a -> IO b) -> IO b
+takingMVar mv and_then_do = takeMVar mv >>= and_then_do
