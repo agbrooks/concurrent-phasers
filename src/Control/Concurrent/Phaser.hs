@@ -100,11 +100,12 @@ advance :: Enum p => Int -> Phaser p -> IO ()
 advance n_registered ph
   | n_registered <= 1 = nextPhase ph >> reset
   | otherwise = do
+      nextPhase ph
       putMVar (_awoken_needed ph) (n_registered)
       putMVar (_awoken ph) (1)
-      nextPhase ph
   where
-    reset = putMVar (_arrived ph) 0
+    reset =  putMVar (_arrived ph) 0
+          >> putMVar (_registered ph) n_registered
 
 -- | Wait at the phaser until all threads arrive. Once all threads have arrived,
 -- | the @Phaser@ proceeds to the next phase, and all threads are unblocked.
