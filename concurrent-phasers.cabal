@@ -16,7 +16,7 @@ extra-source-files:
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     Control.Concurrency.Phaser
+  exposed-modules:     Control.Concurrent.Phaser
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.9 && <4.10

@@ -1,6 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE MultiWayIf   #-}
-module Phaser
+module Control.Concurrent.Phaser
   ( newPhaser
   , newIntPhaser
   , arrived
