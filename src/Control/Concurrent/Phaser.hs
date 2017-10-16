@@ -66,7 +66,9 @@ newPhaser p i = Phaser
   <*> (newEmptyMVar)
 
 -- | Create a new @Phaser@ which uses an Int to track @phase@, starting at 0.
-newIntPhaser :: Int -> IO (Phaser Int)
+newIntPhaser
+  :: Int -- ^ Number of parties to initially register with the Phaser.
+  -> IO (Phaser Int)
 newIntPhaser = newPhaser 0
 
 -- | Register a thread with a @Phaser@.
