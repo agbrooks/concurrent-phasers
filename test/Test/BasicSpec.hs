@@ -1,11 +1,17 @@
+{-# LANGUAGE MultiWayIf #-}
 module Test.BasicSpec
   ( spec
   , main )
 where
 
-import Control.Concurrent ( forkIO )
+import Control.Concurrent ( forkIO
+                          , modifyMVar_
+                          , newMVar
+                          , readMVar
+                          , yield )
 import Control.Monad      ( (=<<)
                           , forM_ )
+import Data.Time.Clock
 import Test.Hspec
 import Test.QuickCheck
 
@@ -16,8 +22,8 @@ main = hspec spec
 
 spec :: Spec
 spec = do
-  describe "Basic Phaser" $ do
-    it "Permits registration" $ do
+  describe "Phaser" $ do
+    it "Performs registration" $ do
       ph <- newIntPhaser 1
       forM_ [1..100]
         (\i -> do
@@ -26,7 +32,7 @@ spec = do
           num_registered `shouldBe` (i + 1)
         )
 
-    it "Permits deregistration" $ do
+    it "Performs deregistration" $ do
       ph <- newIntPhaser 100
       forM_ (reverse [1..99])
         (\i -> do
@@ -84,3 +90,82 @@ spec = do
           new_phase <- phase ph
           new_phase `shouldBe` i
         )
+
+    it "Blocks and unblocks" $ do
+      {-
+      This test uses a combination of a "read" and "write" phaser across two
+      threads to verify that the phasers are blocking / unblocking threads at
+      the appropriate time.
+
+      The "reader" thread reads the MVar x, and the "writer" thread increments
+      it. The two threads "take turns" accessing x.
+
+      While this is a nice test, don't use Phasers like this in the
+      "real world"; you'd be much better off with a pair of MVars.
+      -}
+
+      x        <- newMVar 0
+      ph_read  <- newIntPhaser 2
+      ph_write <- newIntPhaser 2
+
+      -- Increment the read phaser's count by one.
+      forkIO (await ph_read)
+      -- Writer thread
+      forkIO (forM_ [0..99]
+                 (\i -> do
+                     await ph_write
+                     modifyMVar_ x (\i -> return (i + 1 :: Int))
+                     await ph_read
+                 )
+             )
+      -- Reader/validator thread
+      forM_ [0..99]
+        (\i -> do
+            await ph_read
+            x_now <- readMVar x
+            x_now `shouldBe` (i :: Int)
+            await ph_write
+        )
+
+    it "Supports 'fancy' await operations" $ do
+      ph <- newIntPhaser 1
+      -- Wait until phase 10.
+      awaitUntil 10 ph
+      new_phase <- phase ph
+      new_phase `shouldBe` 10
+      -- Wait an additional 5 phases.
+      awaitFor 5 ph
+      new_phase <- phase ph
+      new_phase `shouldBe` 15
+
+    it "Accurately tracks how many parties have arrived" $ do
+      ph <- newIntPhaser 4
+      forM_ [1..3] (\_ -> forkIO (await ph))
+      all_arrived <- reattemptFor 2.0 ((== 3) <$> arrived ph)
+      all_arrived `shouldBe` True
+
+    it "Can trigger an advance with a deregister if need be" $ do
+      ph <- newIntPhaser 4
+      forM_ [1..3] (\_ -> forkIO (await ph))
+      all_arrived <- reattemptFor 2.0 ((== 3) <$> arrived ph)
+      unregister ph
+      new_phase <- phase ph
+      new_phase `shouldBe` 1
+
+-- | Keep attempting some IO action until it returns True or the interval
+--   elapses. The interval is provided in seconds.
+reattemptFor :: Double -> IO Bool -> IO Bool
+reattemptFor interval action =
+  let dt = picosecondsToDiffTime (round $ interval * 1e+12)
+  in getCurrentTime >>= (\now ->
+    let deadline = addUTCTime ((fromRational . toRational) dt) now
+    in action `byDeadline` deadline
+  )
+  where
+    action `byDeadline` deadline = do
+      yield
+      result <- action
+      now    <- getCurrentTime
+      if | result         -> return True
+         | now > deadline -> return False
+         | otherwise      -> action `byDeadline` deadline
