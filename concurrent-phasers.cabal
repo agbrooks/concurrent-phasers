@@ -30,6 +30,7 @@ test-suite phaser-test
   build-depends:    concurrent-phasers
                   , base
                   , hspec
+                  , time
                   , QuickCheck
   ghc-options: -O2 -threaded -rtsopts -with-rtsopts=-N
   default-language: Haskell2010
