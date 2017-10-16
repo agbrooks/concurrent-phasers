@@ -144,7 +144,7 @@ spec = do
       all_arrived <- reattemptFor 2.0 ((== 3) <$> arrived ph)
       all_arrived `shouldBe` True
 
-    it "Can trigger an advance with a deregister if need be" $ do
+    it "Can trigger an advance with an unregister" $ do
       ph <- newIntPhaser 4
       forM_ [1..3] (\_ -> forkIO (await ph))
       all_arrived <- reattemptFor 2.0 ((== 3) <$> arrived ph)
