@@ -56,11 +56,13 @@ arrived ph = readMVar (_arrived ph)
 -- | Create a new @Phaser@.
 newPhaser :: Enum p
           => p -- ^ @phase@ to start in.
-          -> Int -- ^ Number of parties to initially register with the Phaser.
+          -> Int -- ^ Number of parties to initially register with the @Phaser@.
+                 --   Nota bene: a @Phaser@ may have no fewer than 1 party
+                 --   registered.
           -> IO (Phaser p)
 newPhaser p i = Phaser
   <$> (newMVar p)
-  <*> (newMVar i)
+  <*> (newMVar (max 1 i))
   <*> (newMVar 0)
   <*> (newEmptyMVar)
   <*> (newEmptyMVar)
@@ -82,8 +84,8 @@ unregister :: Enum p => Phaser p -> IO ()
 unregister ph =
   takingMVar (_registered ph) (\n_registered ->
     takingMVar (_arrived ph)  (\n_arrived -> do
-      let new_registered = max 0 (n_registered - 1)
-      if (n_arrived >= n_registered - 1) then
+      let new_registered = max 1 (n_registered - 1)
+      if (n_arrived >= new_registered) then
         advance new_registered ph
       else do
         putMVar (_arrived ph)    n_arrived

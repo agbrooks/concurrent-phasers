@@ -18,22 +18,36 @@ spec :: Spec
 spec = do
   describe "Basic Phaser" $ do
     it "Permits registration" $ do
-      ph <- newIntPhaser 0
+      ph <- newIntPhaser 1
       forM_ [1..100]
         (\i -> do
           register ph
           num_registered <- registered ph
-          num_registered `shouldBe` i
+          num_registered `shouldBe` (i + 1)
         )
 
     it "Permits deregistration" $ do
       ph <- newIntPhaser 100
-      forM_ (reverse [0..99])
+      forM_ (reverse [1..99])
         (\i -> do
           unregister ph
           num_registered <- registered ph
           num_registered `shouldBe` i
         )
+
+    it "Won't deregister below 1 phaser" $ do
+      ph <- newIntPhaser 1
+      unregister ph
+      num_registered <- registered ph
+      num_registered `shouldBe` 1
+
+    it "Won't permit creation of a phaser with less than 1 thread registered" $ do
+      ph <- newIntPhaser 0
+      num_registered <- registered ph
+      num_registered `shouldBe` 1
+      ph <- newIntPhaser (-15)
+      num_registered <- registered ph
+      num_registered `shouldBe` 1
 
     it "Provides phase when requested" $ do
       -- Int for phase
