@@ -35,7 +35,6 @@ data Phaser p = Phaser
   { _phase :: MVar p -- ^ Phase we're currently on
   , _registered :: MVar Int -- ^ Number of threads registered.
   , _arrived :: MVar Int -- ^ Number of threads arrived.
-  , _lurking :: MVar Int -- ^ Number of threads "lurking"
   , _awoken :: MVar Int -- ^ Number of threads awoken.
   , _awoken_needed :: MVar Int -- ^ Number of threads that need to be awoken.
   }
@@ -64,7 +63,6 @@ newPhaser :: Enum p
 newPhaser p i = Phaser
   <$> (newMVar p)
   <*> (newMVar (max 1 i))
-  <*> (newMVar 0)
   <*> (newMVar 0)
   <*> (newEmptyMVar)
   <*> (newEmptyMVar)
@@ -124,21 +122,6 @@ await ph =
         waitToAwake n_registered ph
     )
   )
-
-{- |
-Arrive at a @Phaser@, incrementing the number of parties arrived, but do not
-block waiting for it to advance.
--}
-signal :: Enum p => Phaser p -> IO ()
-signal ph = undefined
-
-{-|
-Block on a @Phaser@, but don't increment the number of parties arrived. @lurk@ing
-threads don't 'count' towards the total number of threads waiting on a
-@Phaser@ and cannot trigger an advance.
--}
-lurk :: Enum p => Phaser p -> IO ()
-lurk ph = undefined
 
 -- | @await@ a @Phaser@ for a specified number of phases.
 awaitFor
