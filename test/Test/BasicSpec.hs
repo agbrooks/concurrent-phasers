@@ -147,10 +147,30 @@ spec = do
     it "Can trigger an advance with an unregister" $ do
       ph <- newIntPhaser 4
       forM_ [1..3] (\_ -> forkIO (await ph))
-      all_arrived <- reattemptFor 2.0 ((== 3) <$> arrived ph)
       unregister ph
-      new_phase <- phase ph
-      new_phase `shouldBe` 1
+      phase_advanced <- reattemptFor 2.0 ((== 1) <$> phase ph)
+      phase_advanced `shouldBe` True
+
+  describe "Signal operation" $ do
+
+    it "Increases arrival count" $ do
+      ph <- newIntPhaser 2
+      forkIO (signal ph)
+      signalled <- reattemptFor 2.0 ((== 1) <$> arrived ph)
+      signalled `shouldBe` True
+
+    it "Can advance the phaser" $ do
+      ph <- newIntPhaser 3
+      forM_ [1..3] (\_ -> forkIO (signal ph))
+      has_advanced <- reattemptFor 2.0 ((== 1) <$> phase ph)
+      has_advanced `shouldBe` True
+
+    it "Interoperates with await" $ do
+      ph <- newIntPhaser 4
+      forM_ [1..3] (\_ -> forkIO (signal ph))
+      await ph
+      current_phase <- phase ph
+      current_phase `shouldBe` 1
 
 -- | Keep attempting some IO action until it returns True or the interval
 --   elapses. The interval is provided in seconds.

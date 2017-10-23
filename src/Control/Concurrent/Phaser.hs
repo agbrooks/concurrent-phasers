@@ -4,13 +4,14 @@ module Control.Concurrent.Phaser
   ( newPhaser
   , newIntPhaser
   , arrived
-  , phase
-  , registered
-  , register
-  , unregister
   , await
   , awaitFor
   , awaitUntil
+  , phase
+  , registered
+  , register
+  , signal
+  , unregister
   , Phaser () )
 where
 
@@ -110,7 +111,25 @@ advance n_registered ph
 -- | Wait at the phaser until all threads arrive. Once all threads have arrived,
 -- | the @Phaser@ proceeds to the next phase, and all threads are unblocked.
 await :: Enum p => Phaser p -> IO ()
-await ph =
+await = arriveThen
+  (\ph n_registered n_arrived ->
+     waitToAwake n_registered ph
+  )
+
+-- | Count the thread among those arriving at the phaser, but don't block
+-- | waiting for any others to arrive.
+signal :: Enum p => Phaser p -> IO ()
+signal = arriveThen (\_ _ _ -> return ())
+
+-- | Arrive at the phaser, then perform a provided action.
+--   For internal use only!
+arriveThen
+  :: Enum p
+  => (Phaser p -> Int -> Int -> IO ())
+  -- ^ Action, taking a phaser, number registered, and number arrived
+  -> Phaser p -- ^ The phaser to arrive on, also passed as an argument to the action.
+  -> IO ()
+arriveThen do_this ph =
   takingMVar (_registered ph) (\n_registered ->
     takingMVar (_arrived ph) (\n_arrived -> do
       let is_last_arriving = n_arrived >= n_registered - 1
@@ -119,7 +138,7 @@ await ph =
       else do
         putMVar (_arrived ph)    (n_arrived + 1)
         putMVar (_registered ph) (n_registered)
-        waitToAwake n_registered ph
+        do_this ph n_registered n_arrived
     )
   )
 
