@@ -41,19 +41,22 @@ spec = do
           num_registered `shouldBe` i
         )
 
-    it "Won't deregister below 1 phaser" $ do
+    it "Won't deregister parties below a zero-count" $ do
       ph <- newIntPhaser 1
       unregister ph
       num_registered <- registered ph
-      num_registered `shouldBe` 1
+      num_registered `shouldBe` 0
+      unregister ph
+      num_registered <- registered ph
+      num_registered `shouldBe` 0
 
-    it "Won't permit creation of a phaser with less than 1 thread registered" $ do
+    it "Won't permit creation of a phaser with less than 0 threads registered" $ do
       ph <- newIntPhaser 0
       num_registered <- registered ph
-      num_registered `shouldBe` 1
+      num_registered `shouldBe` 0
       ph <- newIntPhaser (-15)
       num_registered <- registered ph
-      num_registered `shouldBe` 1
+      num_registered `shouldBe` 0
 
     it "Provides phase when requested" $ do
       -- Int for phase
@@ -90,6 +93,13 @@ spec = do
           new_phase <- phase ph
           new_phase `shouldBe` i
         )
+
+    it "Remembers how many registered even after advance" $ do
+      ph <- newIntPhaser 2
+      forkIO (await ph)
+      await ph
+      num_registered <- registered ph
+      num_registered `shouldBe` 2
 
     it "Blocks and unblocks" $ do
       {-
