@@ -124,12 +124,13 @@ register ph = modifyMVar_ (_arrived ph)
 --   arrive, then advance all threads waiting on the @Phaser@.
 unregister :: Enum p => Phaser p -> IO ()
 unregister ph =
-  modifyMVar_ (_arrived ph) (\(ThreadQuota n_arr n_reg) -> do
-    let n_reg' = max 0 (n_reg - 1)
-    when (n_arr >= n_reg') $
-      advance n_reg' ph
-    return (ThreadQuota n_arr n_reg')
-  )
+  bracketOnError (takeMVar $ _arrived ph)
+    (putMVar (_arrived ph))
+    (\(ThreadQuota n_arr n_reg) -> do
+      let n_reg' = max 0 (n_reg - 1)
+      if | n_arr >= n_reg' -> advance n_reg' ph
+         | otherwise -> putMVar (_arrived ph) (ThreadQuota n_arr n_reg')
+    )
 
 -- | Advance a @Phaser@ to the next phase, once all threads have arrived,
 -- | and initialize the "awoken" counter to start waking up blocked threads.
