@@ -15,12 +15,13 @@ module Control.Concurrent.Phaser
   , Phaser () )
 where
 
+import Control.Applicative     ( (<|>) )
 import Control.Concurrent.MVar
 import Control.Exception.Base
 import Control.Monad           ( join
                                , liftM
                                , when )
-import Data.IORef
+import Data.Maybe ( isNothing )
 
 {-
 FIXME:
@@ -28,17 +29,10 @@ A user may want to do something like
 (operationWithPhaser phaser) `onExcept` (unregister phaser),
 which seems pretty sane.
 
-Unfortunately, if the exception is received while the thread is blocked on the
-phaser, and other threads have just woken up, unregister won't be able to run
-because the arrival thread quota won't exist, resulting in deadlock (ouch!).
+HOWEVER --
+If the thread has *already* arrived at the phaser, then unregistering could
+cause the thread to 'double-arrive' at the phaser... :/
 
-Before merging to master, this *MUST* be fixed!
--}
-
-{-
-FIXME:
-unregister / advance causes a deadlock with the introduction of modifyMVar_.
-Easy fix, but I'll save it for later.
 -}
 
 {-
@@ -119,10 +113,46 @@ register :: Enum p => Phaser p -> IO ()
 register ph = modifyMVar_ (_arrived ph)
   (\(ThreadQuota i j) -> return $ i `outOf` (j + 1))
 
--- | Unregister a thread from a @Phaser@. Do not permit the number of registered
---   threads to drop below zero. If the thread unregistering would be the last to
---   arrive, then advance all threads waiting on the @Phaser@.
+{- |
+  Unregister a thread from a @Phaser@. Do not permit the number of registered
+  threads to drop below zero. If the thread unregistering would be the last to
+  arrive, then advance all threads waiting on the @Phaser@.
+
+  @unregister@ is uninterruptable, and can be used to safely unregister a process
+  from a @Phaser@ if it encounters an exception. For example,
+  `(operationWithPhaser phaser) \`onExcept\` (unregister phaser)`.
+-}
 unregister :: Enum p => Phaser p -> IO ()
+unregister ph = uninterruptibleMask_ (_unregister ph) where
+  _unregister ph = do
+    successful <-  tryUnregisterSleeping ph
+               <|> tryUnregisterAwaking  ph
+    when (not successful) (_unregister ph)
+      where
+
+      tryUnregisterAwaking ph = do
+        q <- tryTakeMVar (_awoken ph)
+        case q of
+          Just (ThreadQuota n_awoken n_exp) -> do
+            let n_exp' = max 0 (n_exp - 1)
+            if | n_awoken >= n_exp' -> undefined --TODO
+               | otherwise -> putMVar (_awoken ph) (ThreadQuota n_awoken n_exp')
+            return True
+          _ -> return False
+      {-# INLINE tryUnregisterAwaking #-}
+
+      tryUnregisterSleeping ph = do
+        q <- tryTakeMVar (_arrived ph)
+        case q of
+            Just (ThreadQuota n_arr n_reg) -> do
+              let n_reg' = max 0 (n_reg - 1)
+              if | n_arr >= n_reg' -> advance n_reg' ph
+                 | otherwise -> putMVar (_arrived ph) (ThreadQuota n_arr n_reg')
+              return True
+            _ -> return False
+      {-# INLINE tryUnregisterSleeping #-}
+
+{-
 unregister ph =
   bracketOnError (takeMVar $ _arrived ph)
     (putMVar (_arrived ph))
@@ -131,6 +161,7 @@ unregister ph =
       if | n_arr >= n_reg' -> advance n_reg' ph
          | otherwise -> putMVar (_arrived ph) (ThreadQuota n_arr n_reg')
     )
+-}
 
 -- | Advance a @Phaser@ to the next phase, once all threads have arrived,
 -- | and initialize the "awoken" counter to start waking up blocked threads.
@@ -222,7 +253,6 @@ nextPhase :: Enum p => Phaser p -> IO ()
 nextPhase ph = modifyMVar_ (_phase ph) (return . succ)
 {-# INLINE nextPhase #-}
 
--- | This wrapper tak
 takingMVar :: MVar a -> (a -> IO b) -> IO b
 takingMVar mv and_then = do
   takeMVar mv >>= and_then
