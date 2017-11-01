@@ -27,15 +27,51 @@ import Data.Maybe ( isNothing )
 FIXME:
 A user may want to do something like
 (operationWithPhaser phaser) `onExcept` (unregister phaser),
-which seems pretty sane.
+which is nice and we want to keep that. There are unfortunately a few issues:
 
-HOWEVER --
+"DOUBLE-ARRIVAL issue"
 If the thread has *already* arrived at the phaser, then unregistering could
 cause the thread to 'double-arrive' at the phaser... :/
 
+Here's how a registered thread should behave when receiving an exception:
+* If running a task:    Decrease expected arrival count.
+* If waiting to arrive: Decrease expected arrival count.
+* If waiting to awake:  Decrease expected wakeup  count.
+
+Solution:
+* If running a task:    - Have user specify "unregister" on exception.
+* If waiting to arrive: - Library specifies "unregister" on exception.
+* If waiting to awake:  - Library specifies decrease in wakeup count.
+
+However, this is kind of a problem too -- a user probably wants to say something
+like
+```
+complexParallelAction = _complexParallelAction `onExcept` (unregister phaser)
+
+_complexParallelAction = do
+  doComputation
+  await phaser
+```
+we can't just disregard the "unregister" that was issued.
+
+However, if we make an exception handler that's registered first, that does
+something like decrease or increase the arrival count to counter-act the action
+of unregsister when appropriate, we can prevent anything from double-registering.
+
+So, to counteract:
+* If running a task:    - Don't use an exception handler
+                          ('unregister' alone is sufficient)
+* If waiting to arrive: - Don't use an exception handler
+                          ('unregister' alone is sufficient)
+* If waiting to awake:  - Decrease arrival count.
+                          ('unregister' decreases expected, but 'arriving' means
+                           that we could trigger an advance early!)
+* If already awoken, but not all threads are:
+                        - ... make sure this isn't a problem.
 -}
 
 {-
+TODO: Fix the issue described above.
 TODO: Add support for tree-structured phasers to reduce lock contention.
 TODO: Add more documentation.
 TODO: Don't import everything from imported modules.
