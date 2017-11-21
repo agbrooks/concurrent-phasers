@@ -31,6 +31,15 @@ data Countdown = Countdown
 reset :: Countdown -> IO ()
 reset c = putMVar (arrived c) 0
 
+-- | Set the number of parties registered on a @Countdown@ to an arbitrary
+--   value. Be careful using this unless it is known that the @Countdown@ is not
+--   in use.
+setRegistered :: Int -> Countdown -> IO ()
+setRegistered r c = swapMVar (registered c) r >> return ()
+
+getRegistered :: Countdown -> IO Int
+getRegistered c = readMVar (registered c)
+
 -- | Create a new @Countdown@ for 'i' parties that executes callback 'callback'.
 --   'i' may not drop below zero.
 newCountdown :: Int -> IO () -> IO Countdown

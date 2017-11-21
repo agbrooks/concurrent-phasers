@@ -4,8 +4,8 @@ module Control.Concurrent.Phaser
   ( newPhaser
   , newIntPhaser
   , phase
-  , registered
-  , arrived
+  , Control.Concurrent.Phaser.registered
+  , Control.Concurrent.Phaser.arrived
   , await
   , awaitFor
   , awaitUntil
@@ -20,19 +20,19 @@ where
 
 import Control.Applicative     ( (<|>) )
 import Control.Concurrent.MVar
-import Control.Exception.Base
+import Control.Exception ( uninterruptibleMask_ )
 import Control.Monad           ( (>=>)
                                , join
                                , liftM
                                , when )
 import Data.Maybe ( isNothing )
+import Data.IORef
 
 import Control.Concurrent.Phaser.Internal as Internal
 
 {-
-TODO: Complete re-write in terms of Countdowns
 TODO: Ensure that we can do `\`onExcept\` unregister` nonsense by adjusting
-      the Countdown structure
+      the Countdown structure.
 
 TODO (LT): Add support for tree-structured phasers to reduce lock contention.
 TODO (LT): Add more documentation.
@@ -43,18 +43,18 @@ TODO (LT): Add more documentation.
 data PhaserStatus = Awaiting | Awaking
 
 {-|
-A "Phaser" acts as a reusable barrier with an adjustable number of threads
-that are synchronized by it.
+A "Phaser" acts as a reusable barrier with an adjustable number of thread
+that it synchronizes.
 -}
 data Phaser p = Phaser
   { _phase      :: !(MVar p) -- ^ Current phase of the phaser
   , _status     :: !(MVar PhaserStatus)
-  , _awaiting   :: MVar Countdown
-  , _awaking    :: MVar Countdown
+  , _awaiting   :: IORef Countdown
+  , _awaking    :: IORef Countdown
   }
 
-awaiting = readMVar . _awaiting
-awaking  = readMVar . _awaking
+awaiting = readIORef . _awaiting
+awaking  = readIORef . _awaking
 
 -- | Read the "phase" of the Phaser. Once all threads advance, the phase
 --   increases.
@@ -86,19 +86,39 @@ newPhaser :: Enum p
           -> IO (Phaser p)
 newPhaser p i = do
   -- Make both "halves" of the Phaser
-  awaiting_countdown <- newMVar =<< newCountdown         i undefined
-  awaking_countdown  <- newMVar =<< newDisabledCountdown i undefined
+  awaiting_countdown <- newIORef =<< newCountdown         i undefined
+  awaking_countdown  <- newIORef =<< newDisabledCountdown i undefined
 
-  -- Instruct them to 'Phase' between each other
-  -- FIXME: Actually add the behavior that relates them
-  modifyMVar_ awaiting_countdown (undefined)
-  modifyMVar_ awaking_countdown  (undefined)
+  -- Create a new phaser.
+  new_phaser <- Phaser
+      <$> newMVar p                 -- Use start phase
+      <*> newMVar Awaiting          -- Start in "awaiting" mode
+      <*> return awaiting_countdown -- Reference to awaiting countdown
+      <*> return awaking_countdown  -- Reference to awaking  countdown
 
-  Phaser
-    <$> newMVar p
-    <*> newMVar Awaiting
-    <*> return awaiting_countdown
-    <*> return awaking_countdown
+  -- Describe the actions that should occur when each countdown finishes.
+  -- Phaser state is updated and the other countdown can begin.
+  let
+    -- Awaiting -> Awaking
+    switchToAwaking = uninterruptibleMask_ $ do
+      takeMVar (_status new_phaser)                       -- Seize status lock.
+      nextPhase new_phaser                                -- Advance to next phase.
+      registered <- getRegistered =<< awaiting new_phaser -- Update n. registered
+      (setRegistered registered)  =<< awaking new_phaser
+      putMVar (_status new_phaser) Awaking                -- Mark as awaking.
+      awaking new_phaser >>= reset                        -- Begin awaking.
+
+    -- Awaking -> Awaiting
+    switchToAwaiting = uninterruptibleMask_ $ do
+      takeMVar (_status new_phaser)                       -- Seize status lock.
+      registered <- getRegistered =<< awaking new_phaser  -- Update n. registered
+      (setRegistered registered)  =<< awaiting new_phaser
+      putMVar (_status new_phaser) Awaiting               -- Mark as awaiting.
+      awaiting new_phaser >>= reset                       -- Begin awaiting
+
+  modifyIORef' awaiting_countdown (`withNewAction` switchToAwaking)
+  modifyIORef' awaking_countdown  (`withNewAction` switchToAwaiting)
+  return $! new_phaser
 
 -- | Create a new @Phaser@ which uses an Int to track @phase@, starting at phase 0.
 newIntPhaser
@@ -120,8 +140,8 @@ unregister :: Enum p => Phaser p -> IO ()
 unregister ph = withMVar (_status ph)
   (\status ->
      case status of
-       Awaiting -> (awaiting ph) >>= unregisterCountdown
-       Awaking  -> (awaking  ph) >>= unregisterCountdown
+       Awaiting -> (awaiting ph) >>= unregisterArriveCountdown
+       Awaking  -> (awaking  ph) >>= unregisterArriveCountdown
   )
 
 -- | Wait at the phaser until all threads arrive. Once all threads have arrived,
