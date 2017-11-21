@@ -24,55 +24,53 @@ import Control.Monad           ( (>=>)
                                , when )
 import Data.Maybe ( isNothing )
 
-{-
-KILLED DURING TASK      -- Arrive and unregister (specified by user).
-KILLED BLOCKED ON AWAIT -- Unregister. Trigger awake if last (specified by us).
-KILLED AWAKING          -- Unregister. Trigger await if last (specified by us).
--}
+import Control.Concurrent.Phaser.Internal as Internal
 
 {-
-TODO: Add the above and make it work correctly.
-TODO: Add support for tree-structured phasers to reduce lock contention.
-TODO: Add more documentation.
+TODO: Complete re-write in terms of Countdowns
+TODO: Ensure that we can do `\`onExcept\` unregister` nonsense by adjusting
+      the Countdown structure
+
+TODO (LT): Add support for tree-structured phasers to reduce lock contention.
+TODO (LT): Add more documentation.
 -}
 
-data RegistrationInfo = RegistrationInfo
-  { _registered    :: Int
-  , _unregistering :: Int
-  }
-
+data PhaserStatus = Awaiting | Awaking
 
 {-|
 A "Phaser" acts as a reusable barrier with an adjustable number of threads
 that are synchronized by it.
 -}
 data Phaser p = Phaser
-  { _phase   :: !(MVar p) -- ^ Current phase of the phaser
-  , _registration   :: !(MVar RegistrationInfo) -- ^ Registration info for the phaser.
-  , _arrived :: !(MVar Int)  -- ^ Number of threads arrived and registered.
-  , _awoken  :: !(MVar Int)  -- ^ Number of threads awake and needed.
+  { _phase      :: !(MVar p) -- ^ Current phase of the phaser
+  , _status     :: MVar PhaserStatus
+  , _awaiting   :: Countdown
+  , _awaking    :: Countdown
   }
 
 -- | Read the "phase" of the Phaser. Once all threads advance, the phase
 --   increases.
 phase :: Phaser p -> IO p
-phase = (readMVar . _phase)
+phase = readMVar . _phase
 
 -- | Determine how many parties / threads are currently registered with the
 --   @Phaser@.
 registered :: Phaser p -> IO Int
-registered ph = _registered <$> readMVar (_registration ph)
+registered ph =
+  withMVar (_status ph)
+  (\status ->
+     case status of
+       Awaiting -> readMVar $ Internal.registered (_awaiting ph)
+       Awaking  -> readMVar $ Internal.registered (_awaking ph)
+  )
 
 -- | Determine how many parties have arrived at the @Phaser@.
 arrived :: Phaser p -> IO Int
-arrived ph = readMVar (_arrived ph)
+arrived ph = readMVar $ Internal.arrived (_awaiting ph)
 
 {- |
   Create a new @Phaser@. Note that a phaser may have no fewer than 0 parties
   registered.
-
-  NB: A phaser with zero parties registered behaves like a phaser with
-  one party registered.
 -}
 newPhaser :: Enum p
           => p -- ^ @phase@ to start in.
@@ -80,9 +78,11 @@ newPhaser :: Enum p
           -> IO (Phaser p)
 newPhaser p i = Phaser
   <$> newMVar p
-  <*> newMVar (RegistrationInfo i 0)
-  <*> newMVar 0
-  <*> newEmptyMVar
+  <*> newMVar Awaiting
+  <*> newCountdown         i undefined
+  <*> newDisabledCountdown i undefined
+  -- FIXME: Add the actual behaviors that are needed to relate the two countdowns!
+  -- FIXME: Right now, they aren't specified!
 
 -- | Create a new @Phaser@ which uses an Int to track @phase@, starting at phase 0.
 newIntPhaser
@@ -92,20 +92,30 @@ newIntPhaser = newPhaser 0
 
 -- | Register a thread with a @Phaser@.
 register :: Enum p => Phaser p -> IO ()
-register ph = modifyMVar_ (_registration ph)
-  (\(RegistrationInfo r u) -> return $ RegistrationInfo (r + 1) u)
+register ph = withMVar (_status ph)
+  (\status ->
+     case status of
+       Awaiting -> registerCountdown (_awaiting ph)
+       Awaking  -> registerCountdown (_awaking ph)
+  )
 
 -- | Arrive at a phaser and immediately unregister.
-arriveAndUnregister :: Enum p => Phaser p -> IO ()
-arriveAndUnregister = unregister >=> arrive
+unregister :: Enum p => Phaser p -> IO ()
+unregister ph = withMVar (_status ph)
+  (\status ->
+     case status of
+       Awaiting -> unregisterCountdown (_awaiting ph)
+       Awaking  -> unregisterCountdown (_awaking ph)
+  )
 
 -- | Wait at the phaser until all threads arrive. Once all threads have arrived,
 -- | the @Phaser@ proceeds to the next phase, and all threads are unblocked.
 await :: Enum p => Phaser p -> IO ()
-await = arriveThen
-  (\ph n_registered ->
-     when (n_registered > 1) $ waitToAwake ph
-  )
+await ph =
+  let awaiting = _awaiting ph
+      awaking  = _awaking ph
+  in arriveCountdown awaiting
+  >> arriveCountdown awaking
 
 -- | @await@ a @Phaser@ for a specified number of phases.
 awaitFor
@@ -131,75 +141,39 @@ awaitUntil target_phase phaser =
   )
 
 -- | Count the thread among those arriving at the phaser, but don't block
--- | waiting for any others to arrive.
+--   waiting for any others to arrive. A thread which signals the @Phaser@
+--   should not `lurk` on the @Phaser@.
 signal :: Enum p => Phaser p -> IO ()
-signal = arriveThen (\_ _ -> return ())
+signal ph = arriveCountdown (_awaiting ph)
 
--- | FOR INTERNAL USE ONLY - declares intent to deregister to RegistrationInfo.
--- | Will never cause a phaser to advance.
-unregister :: Phaser p -> IO (Phaser p)
-unregister ph = modifyMVar_ (_registration ph)
-  (\(RegistrationInfo r u) -> return $ RegistrationInfo r (u + 1))
+{- |
+  Don't count the thread among those arriving at the phaser, but don't
+  block waiting for any others to arrive. A thread that lurks on the @Phaser@
+  should not `signal` on the @Phaser@.
 
+  Be careful when using `lurk` - if the phaser advances before
+  lurk is called, it may cause `lurk` to wait for a cycle after the one we
+  actually care about. For this reason, it's probably safer to use `lurkUntil`
+  or `lurkFor`.
 
-enterAwake :: Enum p => Phaser p -> IO ()
-{- TODO: Enter awake phase for the current thread. This could mean either starting the
-   awake process or waiting to awake.
 -}
+lurk ph = readMVar $ Internal.arrived (_awaking ph)
 
-startAwake :: Enum p => Phaser p -> IO ()
-startAwake ph = undefined
-{- TODO:
-Happens when we're the last to arrive.
-Atomically:
- 1. Make reg info'.
- 2. If we're the last, increment the phase.
- 3. Otherwise, set the awake count.
--}
+-- | Like `awaitFor`, but `lurk`s rather than `arrive`s.
+lurkFor :: Enum p => Int -> Phaser p -> IO ()
+lurkFor 0 ph = return ()
+lurkFor i ph = lurk ph >> lurkFor (i - 1) ph
 
-waitForAwake :: Enum p => Phaser p -> IO ()
-waitForAwake = undefined
-{- TODO:
--- Wait for another thread to start the awake.
--- Atomically:
---   * add 1 to awake count.
---   * if we're the last, update the registration count and make awaitable.
---   * if not, put the awake count.
--- If we encounter an async exception while awaiting:
---   * unregister, check if we're the last. If so, update registertaion count and make awaitable.
--}
-
--- | FOR INTERNAL USE ONLY - Arrive at the phaser, then perform a provided action,
--- | if the thread arriving is not the last.
-arriveThen
-  :: Enum p
-  => (Phaser p -> Int -> IO ())
-  -- ^ Action, taking a phaser and number of parties currently registered.
-  -> Phaser p -- ^ The phaser to arrive on, also passed as an argument to the action.
-  -> IO ()
-arriveThen do_this ph =
-  
+-- | Like `awaitUntil`, but `lurk`s rather than `arrive`s.
+lurkUntil :: Enum p => Eq p => p -> Phaser p -> IO ()
+lurkUntil target_phase phaser =
+  phase phaser >>= (\current_phase -> do
+    when (current_phase /= target_phase) $
+      lurk phaser >> lurkUntil target_phase phaser
+    return ()
+  )
 
 -- | FOR INTERNAL USE ONLY - Advance a @Phaser@ to the next phase.
 nextPhase :: Enum p => Phaser p -> IO ()
 nextPhase ph = modifyMVar_ (_phase ph) (return . succ)
 {-# INLINE nextPhase #-}
-
-takingMVar :: MVar a -> (a -> IO b) -> IO b
-takingMVar mv and_then = do
-  takeMVar mv >>= and_then
-
--- | FOR INTERNAL USE ONLY -
---   Actually apply the intention to unregister to the RegistrationInfo.
-nextUnregistering :: RegistrationInfo -> RegistrationInfo
-nextUnregistering i@(RegistrationInfo r u) = RegistrationInfo (expected i) 0
-
--- | FOR INTERNAL USE ONLY -
---   Taking into account the number of parties that want to unregister, how
---   many will be registered once we update?
-willBeRegistered :: RegistrationInfo -> Int
-willBeRegistered (RegistrationInfo r u) = max 0 (r - u)
-
--- | FOR INTERNAL USE ONLY - Are we the last thread to arrive or awake?
-isLastThread :: Int -> RegistrationInfo -> Bool
-isLastThread n_already_there reg_info = (willBeRegistered reg_info) <= n_already_there - 1
