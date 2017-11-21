@@ -3,6 +3,7 @@ where
 
 import Control.Concurrent      ( forkIO )
 import Control.Concurrent.MVar
+import Control.Exception ( bracketOnError )
 import Control.Monad           ( when )
 
 {- |
@@ -74,11 +75,17 @@ unregisterArriveCountdown :: Countdown -> IO ()
 unregisterArriveCountdown c =
   modifyMVar_ (registered c)
   (\n_reg -> do
-      withMVar (arrived c)
-       (\n_arr -> do
-          when (n_reg - 1 <= n_arr) $
-            runCallback c
-       )
+  -- FIXME: This is still wrong -- don't run the callback then put
+  --        the value there or it'll cause a race condition
+      bracketOnError
+        (takeMVar (arrived c))
+        (\n_arr -> putMVar (arrived c) n_arr)
+        (\n_arr -> do
+            if (n_arr >= n_reg - 1) then
+              runCallback c
+            else do
+              putMVar (arrived c) (n_arr + 1)
+        )
       return $ max 0 (n_reg - 1)
   )
 
@@ -88,12 +95,15 @@ arriveCountdown :: Countdown -> IO ()
 arriveCountdown c =
   withMVar (registered c)
   (\n_reg ->
-      modifyMVar_ (arrived c)
-      (\n_arr -> do
-          when (n_arr >= n_reg - 1) $
-            runCallback c
-          return (n_arr + 1)
-      )
+      bracketOnError
+        (takeMVar (arrived c))
+        (\n_arr -> putMVar (arrived c) n_arr)
+        (\n_arr -> do
+            if (n_arr >= n_reg - 1) then
+              runCallback c
+            else do
+              putMVar (arrived c) (n_arr + 1)
+        )
   )
 
 -- | Run the action associated with a @Countdown@'s completion in a new thread.
