@@ -3,14 +3,17 @@
 module Control.Concurrent.Phaser
   ( newPhaser
   , newIntPhaser
+  , phase
+  , registered
   , arrived
   , await
   , awaitFor
   , awaitUntil
-  , phase
-  , registered
   , register
   , signal
+  , lurk
+  , lurkFor
+  , lurkUntil
   , unregister
   , Phaser () )
 where
@@ -35,6 +38,8 @@ TODO (LT): Add support for tree-structured phasers to reduce lock contention.
 TODO (LT): Add more documentation.
 -}
 
+-- | Status of the phaser -- either it's waiting for all threads to join, or it's
+--   waiting to tell them all that it's OK to continue.
 data PhaserStatus = Awaiting | Awaking
 
 {-|
@@ -43,10 +48,13 @@ that are synchronized by it.
 -}
 data Phaser p = Phaser
   { _phase      :: !(MVar p) -- ^ Current phase of the phaser
-  , _status     :: MVar PhaserStatus
-  , _awaiting   :: Countdown
-  , _awaking    :: Countdown
+  , _status     :: !(MVar PhaserStatus)
+  , _awaiting   :: MVar Countdown
+  , _awaking    :: MVar Countdown
   }
+
+awaiting = readMVar . _awaiting
+awaking  = readMVar . _awaking
 
 -- | Read the "phase" of the Phaser. Once all threads advance, the phase
 --   increases.
@@ -60,13 +68,13 @@ registered ph =
   withMVar (_status ph)
   (\status ->
      case status of
-       Awaiting -> readMVar $ Internal.registered (_awaiting ph)
-       Awaking  -> readMVar $ Internal.registered (_awaking ph)
+       Awaiting -> readMVar . Internal.registered =<< (awaiting ph)
+       Awaking  -> readMVar . Internal.registered =<< (awaking ph)
   )
 
 -- | Determine how many parties have arrived at the @Phaser@.
 arrived :: Phaser p -> IO Int
-arrived ph = readMVar $ Internal.arrived (_awaiting ph)
+arrived ph = readMVar . Internal.arrived =<< (awaiting ph)
 
 {- |
   Create a new @Phaser@. Note that a phaser may have no fewer than 0 parties
@@ -76,13 +84,21 @@ newPhaser :: Enum p
           => p -- ^ @phase@ to start in.
           -> Int -- ^ Number of parties to initially register with the @Phaser@.
           -> IO (Phaser p)
-newPhaser p i = Phaser
-  <$> newMVar p
-  <*> newMVar Awaiting
-  <*> newCountdown         i undefined
-  <*> newDisabledCountdown i undefined
-  -- FIXME: Add the actual behaviors that are needed to relate the two countdowns!
-  -- FIXME: Right now, they aren't specified!
+newPhaser p i = do
+  -- Make both "halves" of the Phaser
+  awaiting_countdown <- newMVar =<< newCountdown         i undefined
+  awaking_countdown  <- newMVar =<< newDisabledCountdown i undefined
+
+  -- Instruct them to 'Phase' between each other
+  -- FIXME: Actually add the behavior that relates them
+  modifyMVar_ awaiting_countdown (undefined)
+  modifyMVar_ awaking_countdown  (undefined)
+
+  Phaser
+    <$> newMVar p
+    <*> newMVar Awaiting
+    <*> return awaiting_countdown
+    <*> return awaking_countdown
 
 -- | Create a new @Phaser@ which uses an Int to track @phase@, starting at phase 0.
 newIntPhaser
@@ -95,8 +111,8 @@ register :: Enum p => Phaser p -> IO ()
 register ph = withMVar (_status ph)
   (\status ->
      case status of
-       Awaiting -> registerCountdown (_awaiting ph)
-       Awaking  -> registerCountdown (_awaking ph)
+       Awaiting -> (awaiting ph) >>= registerCountdown
+       Awaking  -> (awaking  ph) >>= registerCountdown
   )
 
 -- | Arrive at a phaser and immediately unregister.
@@ -104,18 +120,17 @@ unregister :: Enum p => Phaser p -> IO ()
 unregister ph = withMVar (_status ph)
   (\status ->
      case status of
-       Awaiting -> unregisterCountdown (_awaiting ph)
-       Awaking  -> unregisterCountdown (_awaking ph)
+       Awaiting -> (awaiting ph) >>= unregisterCountdown
+       Awaking  -> (awaking  ph) >>= unregisterCountdown
   )
 
 -- | Wait at the phaser until all threads arrive. Once all threads have arrived,
 -- | the @Phaser@ proceeds to the next phase, and all threads are unblocked.
 await :: Enum p => Phaser p -> IO ()
-await ph =
-  let awaiting = _awaiting ph
-      awaking  = _awaking ph
-  in arriveCountdown awaiting
-  >> arriveCountdown awaking
+await ph = do
+  awaiting <- awaiting ph
+  awaking  <- awaking ph
+  arriveCountdown awaiting >> arriveCountdown awaking
 
 -- | @await@ a @Phaser@ for a specified number of phases.
 awaitFor
@@ -144,7 +159,7 @@ awaitUntil target_phase phaser =
 --   waiting for any others to arrive. A thread which signals the @Phaser@
 --   should not `lurk` on the @Phaser@.
 signal :: Enum p => Phaser p -> IO ()
-signal ph = arriveCountdown (_awaiting ph)
+signal ph = arriveCountdown =<< awaiting ph
 
 {- |
   Don't count the thread among those arriving at the phaser, but don't
@@ -157,7 +172,10 @@ signal ph = arriveCountdown (_awaiting ph)
   or `lurkFor`.
 
 -}
-lurk ph = readMVar $ Internal.arrived (_awaking ph)
+lurk :: Enum p => Phaser p -> IO ()
+lurk ph = do
+  (readMVar . Internal.arrived) =<< (awaking ph)
+  return ()
 
 -- | Like `awaitFor`, but `lurk`s rather than `arrive`s.
 lurkFor :: Enum p => Int -> Phaser p -> IO ()
