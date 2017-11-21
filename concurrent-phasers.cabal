@@ -17,7 +17,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Control.Concurrent.Phaser
-  -- other-modules:       
+  other-modules:       Control.Concurrent.Phaser.Internal
   -- other-extensions:    
   build-depends:       base >=4.9 && <4.10
   hs-source-dirs:      src
