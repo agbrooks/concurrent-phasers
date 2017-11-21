@@ -1,5 +1,5 @@
 {-# LANGUAGE MultiWayIf #-}
-module Test.BasicSpec
+module PhaserSpec
   ( spec
   , main )
 where
@@ -17,8 +17,8 @@ import Test.QuickCheck
 
 import Control.Concurrent.Phaser
 
-main :: IO ()
-main = hspec spec
+--main :: IO ()
+--main = hspec spec
 
 spec :: Spec
 spec = do
