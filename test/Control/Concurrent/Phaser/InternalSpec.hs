@@ -4,11 +4,7 @@ module Control.Concurrent.Phaser.InternalSpec
   , main )
 where
 
-import Control.Concurrent ( forkIO
-                          , modifyMVar_
-                          , newMVar
-                          , readMVar
-                          , yield )
+import Control.Concurrent 
 import Control.Monad      ( (=<<)
                           , forM_ )
        
@@ -26,7 +22,7 @@ spec = do
   describe "Countdown" $ do
 
     it "Performs registration" $ do
-      cd <- newCountdown 1 (return ())
+      cd <- newCountdown 1 (\_ -> return ())
       forM_ [1..100]
         (\i -> do
           registerCountdown cd
@@ -35,7 +31,7 @@ spec = do
         )
 
     it "Performs unregistration" $ do
-      cd <- newCountdown 101 (return ())
+      cd <- newCountdown 101 (\_ -> return ())
       forM_ [1..100]
         (\i -> do
             unregisterArriveCountdown cd
@@ -43,9 +39,12 @@ spec = do
             num_registered `shouldBe` (101 - i)
         )
 
-    --it "Can advance" $ do
-      --cd <- newCountdown 1 (return ())
-      --arriveCountdown
+    it "Advances successfully with one party" $ do
+      done <- newEmptyMVar
+      cd   <- newCountdown 1 (putMVar done)
+      arriveCountdown cd
+      finished <- readMVar done
+      finished `shouldBe` 1
 
 reattemptFor :: Double -> IO Bool -> IO Bool
 reattemptFor interval action =
