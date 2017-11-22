@@ -75,16 +75,16 @@ unregisterArriveCountdown :: Countdown -> IO ()
 unregisterArriveCountdown c =
   modifyMVar_ (registered c)
   (\n_reg -> do
-  -- FIXME: This is still wrong -- don't run the callback then put
-  --        the value there or it'll cause a race condition
+  -- FIXME: Sanity check this when you've had more sleep.
       bracketOnError
         (takeMVar (arrived c))
         (\n_arr -> putMVar (arrived c) n_arr)
         (\n_arr -> do
-            if (n_arr >= n_reg - 1) then
+            let countdown_done = n_arr >= n_reg - 1
+            if (countdown_done) then
               runCallback c
             else do
-              putMVar (arrived c) (n_arr + 1)
+              putMVar (arrived c) (n_arr)
         )
       return $ max 0 (n_reg - 1)
   )
