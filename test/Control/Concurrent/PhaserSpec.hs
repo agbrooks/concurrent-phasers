@@ -77,8 +77,8 @@ spec = do
       forM_ [1..100]
         (\i -> do
           await ph
-          new_phase <- phase ph
-          new_phase `shouldBe` i
+          phase_advanced <- reattemptFor 0.25 ((== i) <$> phase ph)
+          phase_advanced `shouldBe` True
         )
 
     it "Advances with multiple registered parties" $ do

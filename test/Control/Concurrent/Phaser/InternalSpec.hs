@@ -46,6 +46,12 @@ spec = do
       finished <- readMVar done
       finished `shouldBe` 1
 
+    it "Won't deregister below a zero-count" $ do
+      cd <- newCountdown 0 (\_ -> return ())
+      unregisterArriveCountdown cd
+      registered <- getRegistered cd
+      registered `shouldBe` 0
+
 reattemptFor :: Double -> IO Bool -> IO Bool
 reattemptFor interval action =
   let dt = picosecondsToDiffTime (round $ interval * 1e+12)
