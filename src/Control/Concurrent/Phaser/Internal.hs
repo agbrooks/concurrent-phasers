@@ -23,8 +23,9 @@ data Countdown = Countdown
   , arrived     :: MVar Int -- ^ Number of parties arrived. This value is not
                             --   reset unless reset explicitly by the
                             --  on_completion action.
-  , on_completion :: IO () -- ^ An effect triggered on completion of the
-                           --   countdown.
+  , on_completion :: Int -> IO () -- ^ An effect triggered on completion of the
+                                  --   countdown, passed the number of registered
+                                  --   parties as an argument.
   }
 
 -- | Set the number of parties arrived on a @Countdown@ to zero. If a number of
@@ -34,16 +35,16 @@ reset c = putMVar (arrived c) 0
 
 -- | Set the number of parties registered on a @Countdown@ to an arbitrary
 --   value. Be careful using this unless it is known that the @Countdown@ is not
---   in use.
+--   in use and that the number of registered parties is empty.
 setRegistered :: Int -> Countdown -> IO ()
-setRegistered r c = modifyMVar_ (registered c) (\_ -> return r)
+setRegistered r c = putMVar (registered c) r
 
 getRegistered :: Countdown -> IO Int
 getRegistered c = readMVar (registered c)
 
 -- | Create a new @Countdown@ for 'i' parties that executes callback 'callback'.
 --   'i' may not drop below zero.
-newCountdown :: Int -> IO () -> IO Countdown
+newCountdown :: Int -> (Int -> IO ()) -> IO Countdown
 newCountdown i callback
   = Countdown
   <$> newMVar (max i 0)
@@ -53,15 +54,15 @@ newCountdown i callback
 -- | Create a new @Countdown@ with 'i' parties that executes callback 'callback'.
 --   'i' may not drop below zero. Any attempts to arrive at the @Countdown@ will
 --   block.
-newDisabledCountdown :: Int -> IO () -> IO Countdown
+newDisabledCountdown :: Int -> (Int -> IO ()) -> IO Countdown
 newDisabledCountdown i callback
   = Countdown
   <$> newMVar (max i 0)
   <*> newEmptyMVar
   <*> return callback
 
--- | Replace the action performed by a Countdown
-withNewAction :: Countdown -> IO () -> Countdown
+-- | Replace the action performed by a @Countdown@.
+withNewAction :: Countdown -> (Int -> IO ()) -> Countdown
 withNewAction (Countdown r a _) f = Countdown r a f
 
 -- | Register a new party at a @Countdown@.
@@ -83,7 +84,7 @@ unregisterArriveCountdown c =
         (\n_arr -> do
             let countdown_done = n_arr >= n_reg - 1
             if (countdown_done) then
-              runCallback c
+              runCallback c n_reg
             else do
               putMVar (arrived c) n_arr
         )
@@ -101,7 +102,7 @@ arriveCountdown c =
         (\n_arr -> putMVar (arrived c) n_arr)
         (\n_arr -> do
             if (n_arr >= n_reg - 1) then
-              runCallback c
+              runCallback c n_reg
             else do
               putMVar (arrived c) (n_arr + 1)
         )
@@ -109,6 +110,6 @@ arriveCountdown c =
 
 -- | Run the action associated with a @Countdown@'s completion in a new thread.
 --   This operation is strict.
-runCallback :: Countdown -> IO ()
-runCallback c = forkIO (on_completion c) >> return ()
+runCallback :: Countdown -> Int -> IO ()
+runCallback c num_reg = forkIO (on_completion c num_reg) >> return ()
 {-# INLINABLE runCallback #-}

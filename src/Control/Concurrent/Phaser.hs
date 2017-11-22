@@ -100,21 +100,17 @@ newPhaser p i = do
   -- Phaser state is updated and the other countdown can begin.
   let
     -- Awaiting -> Awaking
-    -- FIXME: Race condition: Can't do getRegistered if the callback triggers...
-    -- FIXME: This is probably why everything deadlocks on advance
-    switchToAwaking = uninterruptibleMask_ $ do
+    switchToAwaking registered = uninterruptibleMask_ $ do
       takeMVar (_status new_phaser)                       -- Seize status lock.
       nextPhase new_phaser                                -- Advance to next phase.
-      registered <- getRegistered =<< awaiting new_phaser -- Update n. registered
-      (setRegistered registered)  =<< awaking new_phaser
+      setRegistered registered  =<< awaking new_phaser    -- Update n. registered.
       putMVar (_status new_phaser) Awaking                -- Mark as awaking.
       awaking new_phaser >>= reset                        -- Begin awaking.
 
     -- Awaking -> Awaiting
-    switchToAwaiting = uninterruptibleMask_ $ do
+    switchToAwaiting registered = uninterruptibleMask_ $ do
       takeMVar (_status new_phaser)                       -- Seize status lock.
-      registered <- getRegistered =<< awaking new_phaser  -- Update n. registered
-      (setRegistered registered)  =<< awaiting new_phaser
+      setRegistered registered  =<< awaiting new_phaser   -- Update n. registered.
       putMVar (_status new_phaser) Awaiting               -- Mark as awaiting.
       awaiting new_phaser >>= reset                       -- Begin awaiting
 
