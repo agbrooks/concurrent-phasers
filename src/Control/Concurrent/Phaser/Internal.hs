@@ -36,7 +36,7 @@ reset c = putMVar (arrived c) 0
 --   value. Be careful using this unless it is known that the @Countdown@ is not
 --   in use.
 setRegistered :: Int -> Countdown -> IO ()
-setRegistered r c = swapMVar (registered c) r >> return ()
+setRegistered r c = modifyMVar_ (registered c) (\_ -> return r)
 
 getRegistered :: Countdown -> IO Int
 getRegistered c = readMVar (registered c)
@@ -76,6 +76,7 @@ unregisterArriveCountdown c =
   modifyMVar_ (registered c)
   (\n_reg -> do
   -- FIXME: Sanity check this when you've had more sleep.
+  --        What if the callback runs, then the thread is killed?
       bracketOnError
         (takeMVar (arrived c))
         (\n_arr -> putMVar (arrived c) n_arr)
@@ -84,7 +85,7 @@ unregisterArriveCountdown c =
             if (countdown_done) then
               runCallback c
             else do
-              putMVar (arrived c) (n_arr)
+              putMVar (arrived c) n_arr
         )
       return $ max 0 (n_reg - 1)
   )
@@ -109,6 +110,5 @@ arriveCountdown c =
 -- | Run the action associated with a @Countdown@'s completion in a new thread.
 --   This operation is strict.
 runCallback :: Countdown -> IO ()
---runCallback c = seq (forkIO $ on_completion c) (return ())
 runCallback c = forkIO (on_completion c) >> return ()
 {-# INLINABLE runCallback #-}

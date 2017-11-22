@@ -100,6 +100,8 @@ newPhaser p i = do
   -- Phaser state is updated and the other countdown can begin.
   let
     -- Awaiting -> Awaking
+    -- FIXME: Race condition: Can't do getRegistered if the callback triggers...
+    -- FIXME: This is probably why everything deadlocks on advance
     switchToAwaking = uninterruptibleMask_ $ do
       takeMVar (_status new_phaser)                       -- Seize status lock.
       nextPhase new_phaser                                -- Advance to next phase.
