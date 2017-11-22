@@ -145,12 +145,8 @@ unregister ph = withMVar (_status ph)
 -- | Wait at the phaser until all threads arrive. Once all threads have arrived,
 -- | the @Phaser@ proceeds to the next phase, and all threads are unblocked.
 await :: Enum p => Phaser p -> IO ()
-await ph = withMVar (_status ph)
-  (\status ->
-     case status of
-       Awaiting -> (awaiting ph) >>= arriveCountdown
-       Awaking  -> (awaking  ph) >>= arriveCountdown
-  )
+await ph =  (arriveCountdown =<< (awaiting ph))
+         >> (arriveCountdown =<< (awaking  ph))
 
 -- | @await@ a @Phaser@ for a specified number of phases.
 awaitFor
