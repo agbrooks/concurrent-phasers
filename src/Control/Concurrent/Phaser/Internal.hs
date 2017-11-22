@@ -109,5 +109,6 @@ arriveCountdown c =
 -- | Run the action associated with a @Countdown@'s completion in a new thread.
 --   This operation is strict.
 runCallback :: Countdown -> IO ()
-runCallback c = seq (forkIO $ on_completion c) (return ())
+--runCallback c = seq (forkIO $ on_completion c) (return ())
+runCallback c = forkIO (on_completion c) >> return ()
 {-# INLINABLE runCallback #-}
