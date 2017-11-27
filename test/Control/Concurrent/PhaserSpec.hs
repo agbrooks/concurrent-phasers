@@ -69,7 +69,7 @@ spec = do
     it "Advances once with one registered party" $ do
       ph <- newIntPhaser 1
       await ph
-      phase_did_advance <- reattemptFor 0.25 ((== 2) <$> phase ph)
+      phase_did_advance <- reattemptFor 0.25 ((== 1) <$> phase ph)
       phase_did_advance `shouldBe` True
 
     it "Advances multiple times with one registered party" $ do
