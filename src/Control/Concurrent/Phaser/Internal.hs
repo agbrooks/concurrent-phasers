@@ -6,6 +6,8 @@ import Control.Concurrent.MVar
 import Control.Exception ( bracketOnError )
 import Control.Monad           ( when )
 
+import Debug.Trace
+
 {- |
   A one-shot @Countdown@ amongst threads.
   Several parties (threads) register/unregister at the @Countdown@. When the number
@@ -37,7 +39,7 @@ reset c = putMVar (arrived c) 0
 --   value. Be careful using this unless it is known that the @Countdown@ is not
 --   in use and that the number of registered parties is empty.
 setRegistered :: Int -> Countdown -> IO ()
-setRegistered r c = putMVar (registered c) r
+setRegistered r c = modifyMVar_ (registered c) (\_ -> return r)
 
 getRegistered :: Countdown -> IO Int
 getRegistered c = readMVar (registered c)
@@ -72,8 +74,8 @@ registerCountdown c = modifyMVar_ (registered c)
 
 -- | Arrive, but unregister a party at a @Countdown@. The registration count may
 --   not go below zero.
-unregisterArriveCountdown :: Countdown -> IO ()
-unregisterArriveCountdown c =
+unregisterCountdown :: Countdown -> IO ()
+unregisterCountdown c =
   modifyMVar_ (registered c)
   (\n_reg -> do
   -- FIXME: Sanity check this when you've had more sleep.
@@ -81,15 +83,18 @@ unregisterArriveCountdown c =
       bracketOnError
         (takeMVar (arrived c))
         (\n_arr -> putMVar (arrived c) n_arr)
-        (\n_arr -> do
-            let countdown_done = n_arr >= n_reg - 1
-            if (countdown_done) then
-              runCallback c n_reg
-            else do
-              putMVar (arrived c) n_arr
+        (\n_arr ->
+           let countdown_done = n_arr >= n_reg - 1
+               at_least_one_registered = n_reg > 0
+           in
+             if (countdown_done && at_least_one_registered) then
+               runCallback c n_reg
+             else
+               putMVar (arrived c) n_arr
         )
       return $ max 0 (n_reg - 1)
   )
+
 
 -- | Arrive at a @Countdown@. If we are the last party to arrive, run the
 --   callback and do not replaced the 'arrived' counter.
@@ -100,11 +105,12 @@ arriveCountdown c =
       bracketOnError
         (takeMVar (arrived c))
         (\n_arr -> putMVar (arrived c) n_arr)
-        (\n_arr -> do
-            if (n_arr >= n_reg - 1) then
-              runCallback c n_reg
-            else do
-              putMVar (arrived c) (n_arr + 1)
+        (\n_arr ->
+           let countdown_done = n_arr >= n_reg - 1
+           in if (countdown_done) then
+                runCallback c n_reg
+              else do
+                putMVar (arrived c) (n_arr + 1)
         )
   )
 

@@ -34,7 +34,7 @@ spec = do
       cd <- newCountdown 101 (\_ -> return ())
       forM_ [1..100]
         (\i -> do
-            unregisterArriveCountdown cd
+            unregisterCountdown cd
             num_registered <- readMVar $ registered cd
             num_registered `shouldBe` (101 - i)
         )
@@ -48,7 +48,7 @@ spec = do
 
     it "Won't deregister below a zero-count" $ do
       cd <- newCountdown 0 (\_ -> return ())
-      unregisterArriveCountdown cd
+      unregisterCountdown cd
       registered <- getRegistered cd
       registered `shouldBe` 0
 

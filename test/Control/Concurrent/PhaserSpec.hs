@@ -42,10 +42,7 @@ spec = do
         )
 
     it "Won't deregister parties below a zero-count" $ do
-      ph <- newIntPhaser 1
-      unregister ph
-      num_registered <- registered ph
-      num_registered `shouldBe` 0
+      ph <- newIntPhaser 0
       unregister ph
       num_registered <- registered ph
       num_registered `shouldBe` 0
@@ -69,7 +66,13 @@ spec = do
       the_phase <- phase =<< newPhaser LT 0
       the_phase `shouldBe` LT
 
-    it "Advances with one registered party" $ do
+    it "Advances once with one registered party" $ do
+      ph <- newIntPhaser 1
+      await ph
+      phase_did_advance <- reattemptFor 0.25 ((== 2) <$> phase ph)
+      phase_did_advance `shouldBe` True
+
+    it "Advances multiple times with one registered party" $ do
       ph <- newIntPhaser 1
       num_registered <- registered ph
       num_registered `shouldBe` 1
@@ -161,6 +164,7 @@ spec = do
       phase_advanced <- reattemptFor 2.0 ((== 1) <$> phase ph)
       phase_advanced `shouldBe` True
 
+{-
   describe "Signal operation" $ do
 
     it "Increases arrival count" $ do
@@ -181,6 +185,7 @@ spec = do
       await ph
       current_phase <- phase ph
       current_phase `shouldBe` 1
+-}
 
 -- | Keep attempting some IO action until it returns True or the interval
 --   elapses. The interval is provided in seconds.

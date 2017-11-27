@@ -112,7 +112,7 @@ newPhaser p i = do
       takeMVar (_status new_phaser)                       -- Seize status lock.
       setRegistered registered  =<< awaiting new_phaser   -- Update n. registered.
       putMVar (_status new_phaser) Awaiting               -- Mark as awaiting.
-      awaiting new_phaser >>= reset                       -- Begin awaiting
+      awaiting new_phaser >>= reset                       -- Begin awaiting.
 
   modifyIORef' awaiting_countdown (`withNewAction` switchToAwaking)
   modifyIORef' awaking_countdown  (`withNewAction` switchToAwaiting)
@@ -138,8 +138,8 @@ unregister :: Enum p => Phaser p -> IO ()
 unregister ph = withMVar (_status ph)
   (\status ->
      case status of
-       Awaiting -> (awaiting ph) >>= unregisterArriveCountdown
-       Awaking  -> (awaking  ph) >>= unregisterArriveCountdown
+       Awaiting -> (awaiting ph) >>= unregisterCountdown
+       Awaking  -> (awaking  ph) >>= unregisterCountdown
   )
 
 -- | Wait at the phaser until all threads arrive. Once all threads have arrived,
