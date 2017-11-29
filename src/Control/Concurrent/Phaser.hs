@@ -4,57 +4,52 @@ module Control.Concurrent.Phaser
   ( newPhaser
   , newIntPhaser
   , phase
-  , Control.Concurrent.Phaser.registered
-  , Control.Concurrent.Phaser.arrived
+  , registered
+  , arrived
   , await
   , awaitFor
   , awaitUntil
   , register
-  , signal
-  , lurk
-  , lurkFor
-  , lurkUntil
+--  , signal
+--  , lurk
+--  , lurkFor
+--  , lurkUntil
   , unregister
   , Phaser () )
 where
 
 import Control.Applicative     ( (<|>) )
+import Control.Concurrent
 import Control.Concurrent.MVar
-import Control.Exception ( uninterruptibleMask_ )
+import Control.Exception ( bracketOnError
+                         , onException
+                         , uninterruptibleMask_ )
 import Control.Monad           ( (>=>)
                                , join
                                , liftM
                                , when )
 import Data.Maybe ( isNothing )
-import Data.IORef
-
-import Control.Concurrent.Phaser.Internal as Internal
 
 {-
 TODO: Ensure that we can do `\`onExcept\` unregister` nonsense by adjusting
       the Countdown structure.
-
 TODO (LT): Add support for tree-structured phasers to reduce lock contention.
 TODO (LT): Add more documentation.
 -}
 
--- | Status of the phaser -- either it's waiting for all threads to join, or it's
---   waiting to tell them all that it's OK to continue.
-data PhaserStatus = Awaiting | Awaking
+type SleepQueue = [MVar ()]
 
 {-|
 A "Phaser" acts as a reusable barrier with an adjustable number of thread
 that it synchronizes.
 -}
 data Phaser p = Phaser
-  { _phase      :: !(MVar p) -- ^ Current phase of the phaser
-  , _status     :: !(MVar PhaserStatus)
-  , _awaiting   :: IORef Countdown
-  , _awaking    :: IORef Countdown
+  { _phase      :: !(MVar p)    -- ^ Current phase of the phaser
+  , _arrived    :: !(MVar Int)  -- ^ Number of parties arrived at the phaser
+  , _registered :: !(MVar Int)  -- ^ Number of parties registered at the phaser
+  , _wake_queue :: MVar SleepQueue -- ^ A list of MVars to unblock when the phaser
+                                   -- ^ advances.
   }
-
-awaiting = readIORef . _awaiting
-awaking  = readIORef . _awaking
 
 -- | Read the "phase" of the Phaser. Once all threads advance, the phase
 --   increases.
@@ -64,17 +59,11 @@ phase = readMVar . _phase
 -- | Determine how many parties / threads are currently registered with the
 --   @Phaser@.
 registered :: Phaser p -> IO Int
-registered ph =
-  withMVar (_status ph)
-  (\status ->
-     case status of
-       Awaiting -> readMVar . Internal.registered =<< (awaiting ph)
-       Awaking  -> readMVar . Internal.registered =<< (awaking ph)
-  )
+registered = readMVar . _registered
 
 -- | Determine how many parties have arrived at the @Phaser@.
 arrived :: Phaser p -> IO Int
-arrived ph = readMVar . Internal.arrived =<< (awaiting ph)
+arrived = readMVar . _arrived
 
 {- |
   Create a new @Phaser@. Note that a phaser may have no fewer than 0 parties
@@ -84,39 +73,12 @@ newPhaser :: Enum p
           => p -- ^ @phase@ to start in.
           -> Int -- ^ Number of parties to initially register with the @Phaser@.
           -> IO (Phaser p)
-newPhaser p i = do
-  -- Make both "halves" of the Phaser
-  awaiting_countdown <- newIORef =<< newCountdown         i undefined
-  awaking_countdown  <- newIORef =<< newDisabledCountdown i undefined
-
-  -- Create a new phaser.
-  new_phaser <- Phaser
-      <$> newMVar p                 -- Use start phase
-      <*> newMVar Awaiting          -- Start in "awaiting" mode
-      <*> return awaiting_countdown -- Reference to awaiting countdown
-      <*> return awaking_countdown  -- Reference to awaking  countdown
-
-  -- Describe the actions that should occur when each countdown finishes.
-  -- Phaser state is updated and the other countdown can begin.
-  let
-    -- Awaiting -> Awaking
-    switchToAwaking registered = uninterruptibleMask_ $ do
-      takeMVar (_status new_phaser)                       -- Seize status lock.
-      nextPhase new_phaser                                -- Advance to next phase.
-      setRegistered registered  =<< awaking new_phaser    -- Update n. registered.
-      putMVar (_status new_phaser) Awaking                -- Mark as awaking.
-      awaking new_phaser >>= reset                        -- Begin awaking.
-
-    -- Awaking -> Awaiting
-    switchToAwaiting registered = uninterruptibleMask_ $ do
-      takeMVar (_status new_phaser)                       -- Seize status lock.
-      setRegistered registered  =<< awaiting new_phaser   -- Update n. registered.
-      putMVar (_status new_phaser) Awaiting               -- Mark as awaiting.
-      awaiting new_phaser >>= reset                       -- Begin awaiting.
-
-  modifyIORef' awaiting_countdown (`withNewAction` switchToAwaking)
-  modifyIORef' awaking_countdown  (`withNewAction` switchToAwaiting)
-  return $! new_phaser
+newPhaser p i =
+  Phaser <$>
+    newMVar p <*>
+    newMVar 0 <*>
+    newMVar i <*>
+    newMVar []
 
 -- | Create a new @Phaser@ which uses an Int to track @phase@, starting at phase 0.
 newIntPhaser
@@ -126,27 +88,64 @@ newIntPhaser = newPhaser 0
 
 -- | Register a thread with a @Phaser@.
 register :: Enum p => Phaser p -> IO ()
-register ph = withMVar (_status ph)
-  (\status ->
-     case status of
-       Awaiting -> (awaiting ph) >>= registerCountdown
-       Awaking  -> (awaking  ph) >>= registerCountdown
+register ph = modifyMVar_ (_registered ph) (\i -> return (i+1))
+
+{- |
+  Immediately unregister from a phaser. If this would cause the registered count
+  to drop below zero, then the registered count will not change. If this would
+  cause all requisite parties to be considered "registered", then advance the
+  phaser.
+-}
+unregister :: Enum p => Phaser p -> IO ()
+unregister ph =
+  modifyMVarMasked_ (_registered ph)
+  (\n_reg ->
+     modifyMVarMasked_ (_arrived ph)
+       (\n_arr ->
+         let
+           any_registered = n_reg > 0
+           is_done = n_arr > n_reg - 1
+         in
+           if (any_registered && is_done) then uninterruptibleMask_ $ do
+             nextPhase ph
+             forkIO $ awaken ph
+             return 0
+           else do
+             return n_arr
+     )
+     return $ max 0 (n_reg - 1)
   )
 
--- | Arrive at a phaser and immediately unregister.
-unregister :: Enum p => Phaser p -> IO ()
-unregister ph = withMVar (_status ph)
-  (\status ->
-     case status of
-       Awaiting -> (awaiting ph) >>= unregisterCountdown
-       Awaking  -> (awaking  ph) >>= unregisterCountdown
-  )
+sleepOn :: SleepQueue -> IO (SleepQueue, MVar ())
+sleepOn queue = do
+  block <- newEmptyMVar
+  let queue' = block:queue
+  return (queue', block)
+
 
 -- | Wait at the phaser until all threads arrive. Once all threads have arrived,
 -- | the @Phaser@ proceeds to the next phase, and all threads are unblocked.
 await :: Enum p => Phaser p -> IO ()
-await ph =  (arriveCountdown =<< (awaiting ph))
-         >> (arriveCountdown =<< (awaking  ph))
+await ph =
+  -- FIXME: Put registered back before blocking, please.
+
+  modifyMVarMasked_ (_registered ph)
+  (\n_reg ->
+     bracketOnError
+       (takeMVar $ _arrived ph)
+       (\n_arr -> tryPutMVar (_arrived ph) n_arr)
+       (\n_arr ->
+          let is_done = n_arr > n_reg - 1 in
+            if is_done then uninterruptibleMask_ $ do
+              nextPhase ph
+              forkIO $ awaken ph
+              putMVar (_arrived ph) 0
+            else do
+              block <- modifyMVar (_wake_queue ph) sleepOn
+              putMVar (_arrived ph) (n_arr + 1)
+              (takeMVar block) `onException` (modifyMVar (_arrived ph) (-1))
+       )
+  )
 
 -- | @await@ a @Phaser@ for a specified number of phases.
 awaitFor
@@ -175,7 +174,9 @@ awaitUntil target_phase phaser =
 --   waiting for any others to arrive. A thread which signals the @Phaser@
 --   should not `lurk` on the @Phaser@.
 signal :: Enum p => Phaser p -> IO ()
-signal ph = arriveCountdown =<< awaiting ph
+signal ph = modifyMVar_ (_arrived ph) (\i -> return (i+1))
+
+-- TODO: Consider adding "signalUntil" and "signalFor"
 
 {- |
   Don't count the thread among those arriving at the phaser, but don't
@@ -186,19 +187,18 @@ signal ph = arriveCountdown =<< awaiting ph
   lurk is called, it may cause `lurk` to wait for a cycle after the one we
   actually care about. For this reason, it's probably safer to use `lurkUntil`
   or `lurkFor`.
-
 -}
 lurk :: Enum p => Phaser p -> IO ()
 lurk ph = do
-  (readMVar . Internal.arrived) =<< (awaking ph)
-  return ()
+  block <- modifyMVar (_wake_queue ph) (sleepOn)
+  takeMVar block >> return ()
 
--- | Like `awaitFor`, but `lurk`s rather than `arrive`s.
+-- | Like `awaitFor`, but `lurk`s rather than `await`s.
 lurkFor :: Enum p => Int -> Phaser p -> IO ()
 lurkFor 0 ph = return ()
 lurkFor i ph = lurk ph >> lurkFor (i - 1) ph
 
--- | Like `awaitUntil`, but `lurk`s rather than `arrive`s.
+-- | Like `awaitUntil`, but `lurk`s rather than `await`s.
 lurkUntil :: Enum p => Eq p => p -> Phaser p -> IO ()
 lurkUntil target_phase phaser =
   phase phaser >>= (\current_phase -> do
@@ -207,7 +207,18 @@ lurkUntil target_phase phaser =
     return ()
   )
 
--- | FOR INTERNAL USE ONLY - Advance a @Phaser@ to the next phase.
+-- | Advance a @Phaser@ to the next phase. For internal use only.
 nextPhase :: Enum p => Phaser p -> IO ()
 nextPhase ph = modifyMVar_ (_phase ph) (return . succ)
 {-# INLINE nextPhase #-}
+
+-- | Awaken all threads blocked on the phaser.
+-- | For internal use only!
+awaken :: Phaser p -> IO ()
+awaken ph =
+  uninterruptibleMask_ $
+  modifyMVar_ (_wake_queue ph)
+    (\wq -> do
+       mapM ((flip putMVar) ()) wq
+       return []
+    )
