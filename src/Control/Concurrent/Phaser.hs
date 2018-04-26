@@ -53,8 +53,8 @@ newPhaser
   -> IO (Phaser p)
 newPhaser p parties =
   atomically $
-  Phaser <$> newTVar  p       -- Initial phase
-         <*> newTVar  parties -- Initial parties
+  Phaser <$> newTVar  p               -- Initial phase
+         <*> newTVar  (max 0 parties) -- Initial parties
          <*> newTVar  0
          <*> newEmptyTMVar  -- Signals received, empty until all register.
          <*> newTVar  0
@@ -76,11 +76,13 @@ register p = batchRegister p 1
 
 -- | Tell a @Phaser@ to expect one fewer party when its next phase begins.
 unregister :: Phaser p -> IO ()
-unregister p = batchUnregister p (-1)
+unregister p = batchUnregister p 1
 
 -- | Register several parties on a @Phaser@.
 batchRegister :: Phaser p -> Int -> IO ()
-batchRegister p i = atomically $ modifyTVar (_adjustment p) (+i)
+batchRegister p i =
+  atomically $ modifyTVar (_adjustment p)
+    (\adj -> max 0 (i + adj))
 
 -- | Unregister several parties on a @Phaser@.
 batchUnregister :: Phaser p -> Int -> IO ()
@@ -156,7 +158,12 @@ enterInMode p m = atomically $ do
 
 -- Unblock exit of signalling parties. These, in turn, free the waiting parties.
 finishEntry :: Phaser p -> STM ()
-finishEntry p = putTMVar (_sig_rx p) 0
+finishEntry p = do
+  sig_reg <- readTVar $ _sig_reg p
+  -- If no signallers are registered, we could deadlock.
+  -- Act as if all signallers have arrived if this is the case.
+  if | sig_reg == 0 -> putTMVar (_wait_fin p) 0
+     | otherwise    -> putTMVar (_sig_rx   p) 0
 
 wait :: Enum p => Phaser p -> IO ()
 wait p = atomically $ do
