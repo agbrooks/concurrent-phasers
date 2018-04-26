@@ -1,11 +1,11 @@
 {-# LANGUAGE MultiWayIf #-}
 module Control.Concurrent.PhaserSpec
-  ( phaser_spec
+  ( spec
   , main )
 where
 
-import Control.Concurrent ( forkIO
-                          , yield  )
+import Control.Concurrent
+import Control.Concurrent.STM
 import Control.Monad      ( (=<<)
                           , forM_ )
 import Data.Time.Clock
@@ -15,21 +15,45 @@ import Test.QuickCheck
 import Control.Concurrent.Phaser
 
 main :: IO ()
-main = hspec phaser_spec
+main = hspec spec
 
-phaser_spec :: Spec
-phaser_spec = describe "Phaser" $ do
+spec :: Spec
+spec = describe "Phaser" $ do
   it "works once with one signaller" $ do
-    0 `shouldBe` 0
+    -- Place something in an MVar within a phaser and confirm the result.
+    x <- newEmptyMVar
+    ph <- newIntPhaser 1
+    runPhased ph Signal (putMVar x 1)
+    one <- readMVar x
+    one `shouldBe` 1
+
   it "works twice with one signaller" $ do
+    -- Increment an MVar twice within a phaser and confirm the result.
+    x  <- newMVar 0
+    ph <- newIntPhaser 1
+    runPhased ph Signal (modifyMVar_ x (\i -> return $ i + 1))
+    one <- readMVar x
+    one `shouldBe` 1
+    runPhased ph Signal (modifyMVar_ x (\i -> return $ i + 1))
+    two <- readMVar x
+    two `shouldBe` 2
+
+  it "won't deadlock with only Wait-ing threads" $ do
+    x <- newEmptyMVar
+    ph <- newIntPhaser 1
+    runPhased ph Wait (putMVar x True)
+    true <- takeMVar x
+    true `shouldBe` True
+
+  it "permits registration while all threads exited" $ do
     0 `shouldBe` 0
-  it "permits basic registration" $ do
+  it "permits unregistration while all threads exited" $ do
     0 `shouldBe` 0
-  it "permits basic unregistration" $ do
+  it "permits registration inside phaser" $ do
+    0 `shouldBe` 0
+  it "permits unregistration inside phaser" $ do
     0 `shouldBe` 0
   it "won't deregister below 0" $ do
-    0 `shouldBe` 0
-  it "won't deadlock with 0 signallers" $ do
     0 `shouldBe` 0
   it "provides phase" $ do
     0 `shouldBe` 0

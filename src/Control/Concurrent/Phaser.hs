@@ -2,7 +2,7 @@
 {-# LANGUAGE MultiWayIf   #-}
 module Control.Concurrent.Phaser
   ( Phaser ()
-  , PhaserMode
+  , PhaserMode ( Signal, Wait, SignalWait )
   , newPhaser
   , newIntPhaser
   , phase
