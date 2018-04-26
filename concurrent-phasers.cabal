@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                concurrent-phasers
-version:             0.1.0.0
+version:             0.1.0
 synopsis:            'Phasers' for parallel computation
 -- description:         
 license:             MIT
@@ -16,10 +16,11 @@ extra-source-files:
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     Control.Concurrent.Phaser, Control.Concurrent.Phaser.Internal
+  exposed-modules:     Control.Concurrent.Phaser
   --other-modules:       Control.Concurrent.Phaser.Internal
-  -- other-extensions:    
-  build-depends:       base >=4.9 && <4.10
+  --other-extensions:    
+  build-depends:       base >= 4.9 && < 5.0
+                     , stm  >= 2.4 && < 3.0
   hs-source-dirs:      src
   default-language:    Haskell2010
 
@@ -32,7 +33,7 @@ test-suite phaser-test
                   , hspec
                   , time
                   , QuickCheck
-  ghc-options: -O2 -threaded -rtsopts -with-rtsopts=-N
+  ghc-options: -O0 -threaded -rtsopts -with-rtsopts=-N
   default-language: Haskell2010
 
 source-repository head
