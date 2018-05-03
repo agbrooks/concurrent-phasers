@@ -19,7 +19,7 @@ main = hspec spec
 
 spec :: Spec
 spec = describe "Phaser" $ do
-  it "works once with one signaller" $ do
+  it "works once with one Signal-mode thread" $ do
     -- Place something in an MVar within a phaser and confirm the result.
     x <- newEmptyMVar
     ph <- newIntPhaser 1
@@ -27,7 +27,7 @@ spec = describe "Phaser" $ do
     one <- readMVar x
     one `shouldBe` 1
 
-  it "works twice with one signaller" $ do
+  it "works twice with one Signal-mode thread" $ do
     -- Increment an MVar twice within a phaser and confirm the result.
     x  <- newMVar 0
     ph <- newIntPhaser 1
@@ -45,6 +45,32 @@ spec = describe "Phaser" $ do
     true <- takeMVar x
     true `shouldBe` True
 
+  it "works twice with one Wait-mode thread" $ do
+    -- Increment an MVar twice within a phaser and confirm the result
+    x <- newMVar 0
+    ph <- newIntPhaser 1
+    runPhased ph Wait (modifyMVar_ x (\i -> return $ i + 1))
+    one <- readMVar x
+    one `shouldBe` 1
+    runPhased ph Wait (modifyMVar_ x (\i -> return $ i + 1))
+    two <- readMVar x
+    two `shouldBe` 2
+
+  it "won't deadlock with a SignalWait-mode thread" $ do
+    ph <- newIntPhaser 1
+    runPhased ph SignalWait (return ())
+
+  it "works twice with one SignalWait-mode thread" $ do
+    -- Increment MVar twice and confirm the result
+    x <- newMVar 0
+    ph <- newIntPhaser 1
+    runPhased ph SignalWait (modifyMVar_ x (\i -> return $ i + 1))
+    one <- readMVar x
+    one `shouldBe` 1
+    runPhased ph SignalWait (modifyMVar_ x (\i -> return $ i + 1))
+    two <- readMVar x
+    two `shouldBe` 2
+
   it "provides phase" $ do
     ph <- newIntPhaser 1
     orig_phase <- phase ph
@@ -55,6 +81,15 @@ spec = describe "Phaser" $ do
     new_phase <- phase ph -- Should be able to read multiply
     new_phase `shouldBe` 1
 
+  it "increments phase properly" $ do
+    ph <- newIntPhaser 1
+    runPhased ph Signal (return ())
+    new_phase <- phase ph
+    new_phase `shouldBe` 1
+    runPhased ph Signal (return ())
+    new_phase <- phase ph
+    new_phase `shouldBe` 2
+
   it "permits registration while all threads exited" $ do
     -- Create a phaser with one party, then register another.
     ph <- newIntPhaser 1
@@ -64,17 +99,18 @@ spec = describe "Phaser" $ do
     runPhased ph SignalWait (return ())
     -- To rule out the 'both went through in separate phases' case, check the
     -- phase.
-    p <- phase ph
-    p `shouldBe` 1
+    success <- reattemptFor 0.2 ((==) <$> phase ph <*> (return 1))
+    success `shouldBe` True
 
   it "permits unregistration while all threads exited" $ do
     ph <- newIntPhaser 2
     unregister ph
-    -- Phaser should now expect one party.
+    -- Phaser should now expect one party. So, two threads passing through
+    -- should advance the phase twice.
     forkIO (runPhased ph SignalWait (return ()))
     runPhased ph SignalWait (return ())
-    p <- phase ph
-    p `shouldBe` 2
+    success <- reattemptFor 0.2 ((==) <$> phase ph <*> return 2)
+    success `shouldBe` True
 
   it "permits registration inside phaser" $ do
     ph <- newIntPhaser 1
@@ -91,8 +127,8 @@ spec = describe "Phaser" $ do
     -- sure that it didn't just run twice.
     forkIO (runPhased ph Wait (return ())) --
     runPhased ph SignalWait (return ())
-    p <- phase ph
-    p `shouldBe` 2
+    success <- reattemptFor 0.2 ((==) <$> phase ph <*> return 2)
+    success `shouldBe` True
 
   it "permits unregistration inside phaser" $ do
     -- Very similar to the "registration inside phaser" test.
@@ -102,8 +138,8 @@ spec = describe "Phaser" $ do
 
     forkIO (runPhased ph SignalWait (unregister ph))
     runPhased ph SignalWait (return ())
-    p <- phase ph
-    p `shouldBe` 1
+    success <- reattemptFor 0.2 ((==) <$> phase ph <*> return 1)
+    success `shouldBe` True
 
     -- Only one needed for this phase. If unregister failed, we just deadlocked.
     runPhased ph SignalWait (return ())
@@ -113,7 +149,7 @@ spec = describe "Phaser" $ do
   it "gracefully handles having no registered parties" $ do
     ph <- newIntPhaser 0
     mv <- newMVar 0
-    runPhased ph SignalWait (modifyMVar_ mv (\i -> return $ i + i))
+    runPhased ph SignalWait (modifyMVar_ mv (\i -> return $ i + 1))
     v  <- readMVar mv
     v `shouldBe` 1
 

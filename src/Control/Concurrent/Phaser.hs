@@ -18,9 +18,11 @@ import Control.Concurrent.STM
 import Control.Exception       ( uninterruptibleMask_ )
 import Control.Monad           ( when )
 
+import Debug.Trace
+
 {- TODO:
 * Check Haddock syntax.
-* Apply uninterruptableMask_ to prevent deadlock.
+* Do we need to apply uninterruptableMask_ to prevent deadlock?
 -}
 
 {- |Mode in which a task uses a @Phaser@.
@@ -36,8 +38,8 @@ data PhaserMode
 data Phaser p = Phaser
   { _phase       :: TVar p   -- ^ Phase of the phaser.
   , _registered  :: TVar Int -- ^ Parties registered on the phaser.
-  , _adjustment  :: TVar Int -- ^ Number of parties planning to enter or leave
-                             --   during the next @Phaser@ pass.
+  , _registered' :: TVar Int -- ^ Number of parties that will be registered
+                             --   on the phaser next time.
   , _sig_rx   :: TMVar Int   -- ^ Signals received.
   , _sig_reg  :: TVar Int    -- ^ Signals registered (signals required to advance)
   , _wait_fin :: TMVar Int -- ^ Waits finished.
@@ -55,7 +57,7 @@ newPhaser p parties =
   atomically $
   Phaser <$> newTVar  p               -- Initial phase
          <*> newTVar  (max 0 parties) -- Initial parties
-         <*> newTVar  0
+         <*> newTVar  (max 0 parties)
          <*> newEmptyTMVar  -- Signals received, empty until all register.
          <*> newTVar  0
          <*> newEmptyTMVar  -- Waits received, empty until all register.
@@ -81,8 +83,8 @@ unregister p = batchUnregister p 1
 -- | Register several parties on a @Phaser@.
 batchRegister :: Phaser p -> Int -> IO ()
 batchRegister p i =
-  atomically $ modifyTVar (_adjustment p)
-    (\adj -> max 0 (i + adj))
+  atomically $ modifyTVar (_registered' p)
+    (\reg -> max 0 (i + reg))
 
 -- | Unregister several parties on a @Phaser@.
 batchUnregister :: Phaser p -> Int -> IO ()
@@ -134,18 +136,23 @@ modeWaits :: PhaserMode -> Bool
 modeWaits Signal = False
 modeWaits _      = True
 
--- Alter the number of registered parties by adding the adjustment.
-applyAdjustment :: Phaser p -> STM ()
-applyAdjustment p = do
-  adj <- swapTVar (_adjustment p) 0
-  modifyTVar (_registered p) (+ adj)
+-- Update the number of registered parties to use the number planned.
+updateRegistered :: Phaser p -> STM ()
+updateRegistered p =
+  writeTVar (_registered p) =<< (readTVar $ _registered' p)
+
+resetSigWaitRegistered :: Phaser p -> STM ()
+resetSigWaitRegistered p =
+  writeTVar (_sig_reg  p) 0 >>
+  writeTVar (_wait_reg p) 0
 
 -- Enter the phaser in a given mode.
 enterInMode :: Phaser p -> PhaserMode -> IO ()
 enterInMode p m = atomically $ do
   -- Adjust for new parties registered or unregistered
   entered    <- takeTMVar (_entered p)
-  when (entered == 0) $ applyAdjustment p
+  when (entered == 0) $  updateRegistered p
+                      >> resetSigWaitRegistered p
   registered <- readTVar (_registered p)
 
   -- Adjust signal / wait registration
@@ -177,11 +184,11 @@ signal p = atomically $ do
   w_reg <- readTVar  (_wait_reg p)
   s_reg <- readTVar  (_sig_reg  p)
   s_rx  <- takeTMVar (_sig_rx   p)
-  let is_last_signal = s_reg <= (s_rx + 1)
-      no_waits       = w_reg == 0
-      unblockWaits   = putTMVar (_wait_fin p) 0
+  let is_last_signal  = s_reg <= (s_rx + 1)
+      no_waits        = w_reg == 0
+      unblockWaits () = putTMVar (_wait_fin p) 0
   if | is_last_signal && no_waits -> advance p
-     | is_last_signal             -> unblockWaits
+     | is_last_signal             -> unblockWaits ()
      | otherwise                  -> putTMVar (_sig_rx p) (s_rx + 1)
 
 -- Increase the phase to its successor.
