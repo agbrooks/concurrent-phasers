@@ -117,8 +117,7 @@ runMultiPhased pairs action =
   let signal_pairs = filter (\(_, m) -> modeSignals m) pairs
       wait_pairs   = filter (\(_, m) -> modeWaits   m) pairs
   in do
-    mapM_ (uncurry enterInMode) signal_pairs
-    mapM_ (uncurry enterInMode) wait_pairs
+    mapM_ (uncurry enterInMode) pairs
     result <- action
     mapM_ (signal . fst) signal_pairs
     mapM_ (wait   . fst) wait_pairs

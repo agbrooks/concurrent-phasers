@@ -165,19 +165,47 @@ spec = describe "Phaser" $ do
     p `shouldBe` 1
 
   it "blocks Wait-mode threads" $ do
-    0 `shouldBe` 0 -- TODO
+    ph <- newIntPhaser 2
+    -- Start a background thread that should not increment the phase.
+    forkIO (runPhased ph Wait $ return ())
+    yield
+    -- Confirm phase not updated (ie, wait-mode thread was blocked).
+    phase_updated <- reattemptFor 0.05 ((==) <$> phase ph <*> return 1)
+    phase_updated `shouldBe` False
+    -- Send in signalling thread to unblock.
+    runPhased ph Signal $ return ()
+    phase_updated <- reattemptFor 0.1 ((==) <$> phase ph <*> return 1)
+    phase_updated `shouldBe` True
 
   it "blocks SigWait-mode threads" $ do
-    0 `shouldBe` 0 -- TODO
+    ph <- newIntPhaser 2
+    -- Start a background thread that should not increment the phase.
+    forkIO (runPhased ph SignalWait $ return ())
+    yield
+    -- Confirm phase not updated (ie, wait-mode thread was blocked).
+    phase_updated <- reattemptFor 0.05 ((==) <$> phase ph <*> return 1)
+    phase_updated `shouldBe` False
+    -- Send in signalling thread to unblock.
+    runPhased ph Signal $ return ()
+    phase_updated <- reattemptFor 0.1 ((==) <$> phase ph <*> return 1)
+    phase_updated `shouldBe` True
 
-  it "won't block Signal-mode threads" $ do
-    0 `shouldBe` 0 -- TODO
+  it "can perform mixed-mode, multi-phaser operations" $ do
+    {-
+       Make two phasers. Run on both simultaneously in each of two threads.
+       One thread provides the signal, and the other the wait.
+       If we don't order the signal and wait correctly in `runMultiPhased`, this
+       would deadlock.
+    -}
+    ph1 <- newIntPhaser 2
+    ph2 <- newIntPhaser 2
+    forkIO (runMultiPhased [(ph1, Signal), (ph2, Wait)  ] $ return ())
+    runMultiPhased         [(ph1, Wait),   (ph2, Signal)] $ return ()
+    phase1_updated <- reattemptFor 0.1 ((==) <$> phase ph1 <*> return 1)
+    phase2_updated <- reattemptFor 0.1 ((==) <$> phase ph2 <*> return 1)
 
-  it "survives multi-phase operations" $ do
-    0 `shouldBe` 0 -- TODO
-
-  it "survives mixed-mode multi-phase operations" $ do
-    0 `shouldBe` 0 -- TODO
+    phase1_updated `shouldBe` True
+    phase2_updated `shouldBe` True
 
 -- | Keep attempting some IO action until it returns True or the interval
 --   elapses. The interval is provided in seconds.
