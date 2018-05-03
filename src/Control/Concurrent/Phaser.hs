@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE MultiWayIf   #-}
 module Control.Concurrent.Phaser
   ( Phaser    ()
@@ -21,15 +20,15 @@ import Control.Concurrent.STM
 import Control.Monad           ( when )
 
 data STMPhaser p = STMPhaser
-  { _phase       :: TVar p   -- ^ Phase of the phaser.
-  , _registered  :: TVar Int -- ^ Parties registered on the phaser.
-  , _registered' :: TVar Int -- ^ Number of parties that will be registered
+  { _phase       :: TVar p   -- Phase of the phaser.
+  , _registered  :: TVar Int -- Parties registered on the phaser.
+  , _registered' :: TVar Int -- Number of parties that will be registered
                              --   on the phaser next time.
-  , _sig_rx   :: TMVar Int   -- ^ Signals received.
-  , _sig_reg  :: TVar Int    -- ^ Signals registered (signals required to advance)
-  , _wait_fin :: TMVar Int -- ^ Waits finished.
-  , _wait_reg :: TVar Int  -- ^ Waits registered.
-  , _entered  :: TMVar Int -- ^ Parties that have entered the phaser.
+  , _sig_rx   :: TMVar Int   -- Signals received.
+  , _sig_reg  :: TVar Int    -- Signals registered (signals required to advance)
+  , _wait_fin :: TMVar Int -- Waits finished.
+  , _wait_reg :: TVar Int  -- Waits registered.
+  , _entered  :: TMVar Int -- Parties that have entered the phaser.
   }
 
 instance Phaser STMPhaser where

@@ -29,7 +29,7 @@ class Phaser (r :: * -> *) where
   batchRegister :: r p -> Int -> IO ()
   phase         :: r p -> IO p
 
--- | Create a new phaser with initial phase 0.
+-- | Create a new @Phaser@ with initial phase 0.
 newIntPhaser :: (Phaser r) => Int -> IO (r Int)
 newIntPhaser parties = newPhaser 0 parties
 
