@@ -26,8 +26,8 @@ data STMPhaser p = STMPhaser
   , _registered  :: TVar Int -- Parties registered on the phaser.
   , _registered' :: TVar Int -- Number of parties that will be registered
                              --   on the phaser next time.
-  , _sig_rx   :: TMVar Int   -- Signals received.
-  , _sig_reg  :: TVar Int    -- Signals registered (signals required to advance)
+  , _sig_rx   :: TVar Int  -- Signals received.
+  , _sig_reg  :: TVar Int  -- Signals registered (signals required to advance)
   , _wait_fin :: TMVar Int -- Waits finished.
   , _wait_reg :: TVar Int  -- Waits registered.
   , _entered  :: TMVar Int -- Parties that have entered the phaser.
@@ -52,7 +52,7 @@ newPhaser_ p parties =
   STMPhaser <$> newTVar  p               -- Initial phase
             <*> newTVar  (max 0 parties) -- Initial parties
             <*> newTVar  (max 0 parties)
-            <*> newEmptyTMVar  -- Signals received, empty until all register.
+            <*> newTVar  0     -- Signals received.
             <*> newTVar  0
             <*> newEmptyTMVar  -- Waits received, empty until all register.
             <*> newTVar  0
@@ -103,11 +103,12 @@ enterInMode_ p m = atomically $ do
 -- Unblock exit of signalling parties. These, in turn, free the waiting parties.
 finishEntry :: STMPhaser p -> STM ()
 finishEntry p = do
+  sig_rx  <- readTVar $ _sig_rx  p
   sig_reg <- readTVar $ _sig_reg p
-  -- If no signallers are registered, we could deadlock.
-  -- Act as if all signallers have arrived if this is the case.
-  if | sig_reg == 0 -> putTMVar (_wait_fin p) 0
-     | otherwise    -> putTMVar (_sig_rx   p) 0
+
+  -- If all signallers have already arrived, or none were ever registered,
+  -- unblock anyone that's Wait-ing.
+  when (sig_rx >= sig_reg) $ putTMVar (_wait_fin p) 0
 
 wait_ :: Enum p => STMPhaser p -> IO ()
 wait_ p = atomically $ do
@@ -118,15 +119,16 @@ wait_ p = atomically $ do
 
 signal_ :: Enum p => STMPhaser p -> IO ()
 signal_ p = atomically $ do
-  w_reg <- readTVar  (_wait_reg p)
-  s_reg <- readTVar  (_sig_reg  p)
-  s_rx  <- takeTMVar (_sig_rx   p)
-  let is_last_signal  = s_reg <= (s_rx + 1)
-      no_waits        = w_reg == 0
-      unblockWaits () = putTMVar (_wait_fin p) 0
-  if | is_last_signal && no_waits -> advance p
-     | is_last_signal             -> unblockWaits ()
-     | otherwise                  -> putTMVar (_sig_rx p) (s_rx + 1)
+  s_rx  <- readTVar (_sig_rx   p)
+  w_reg <- readTVar (_wait_reg p)
+  s_reg <- readTVar (_sig_reg  p)
+  let is_last_signal = s_reg <= (s_rx + 1)
+      no_waits       = w_reg == 0
+      unblockWaits   = putTMVar (_wait_fin p) 0
+  -- Handle receipt of all signals
+  if | is_last_signal && no_waits -> advance p       -- All arrived, advance phase
+     | is_last_signal             -> unblockWaits    -- All arrived, awaken awaits
+     | otherwise -> writeTVar (_sig_rx p) (s_rx + 1) -- Just receive signal
 
 -- Increase the phase to its successor.
 nextPhase :: Enum p => STMPhaser p -> STM ()
@@ -134,4 +136,7 @@ nextPhase p = modifyTVar (_phase p) succ
 
 -- Move on to the next phase and permit entry into the phaser.
 advance :: Enum p => STMPhaser p -> STM ()
-advance p = nextPhase p >> putTMVar (_entered p) 0
+advance p
+  =  nextPhase p
+  >> writeTVar (_sig_rx p)  0
+  >> putTMVar  (_entered p) 0
