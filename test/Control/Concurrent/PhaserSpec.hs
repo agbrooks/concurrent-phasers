@@ -13,16 +13,21 @@ import Test.Hspec
 import Test.QuickCheck
 
 import Control.Concurrent.Phaser
+import Control.Concurrent.Phaser.STM
 
 main :: IO ()
 main = hspec spec
 
 spec :: Spec
-spec = describe "STM Phaser" $ do
+spec =  makeSpecForPhaser (newSTMPhaser 0) "STM Phaser"
+     >> makeSpecForPhaser (newIOPhaser  0) "Phaser"
+
+makeSpecForPhaser implNewIntPhaser name = describe name $ do
+
   it "works once with one Signal-mode thread" $ do
     -- Place something in an MVar within a phaser and confirm the result.
     x <- newEmptyMVar
-    ph <- newIntPhaser 1 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 1 :: IO (STMPhaser Int)
     runPhased ph Signal (putMVar x 1)
     one <- readMVar x
     one `shouldBe` 1
@@ -30,7 +35,7 @@ spec = describe "STM Phaser" $ do
   it "works twice with one Signal-mode thread" $ do
     -- Increment an MVar twice within a phaser and confirm the result.
     x  <- newMVar 0
-    ph <- newIntPhaser 1 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 1 :: IO (STMPhaser Int)
     runPhased ph Signal (modifyMVar_ x (\i -> return $ i + 1))
     one <- readMVar x
     one `shouldBe` 1
@@ -40,7 +45,7 @@ spec = describe "STM Phaser" $ do
 
   it "won't deadlock with only Wait-ing threads" $ do
     x <- newEmptyMVar
-    ph <- newIntPhaser 1 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 1 :: IO (STMPhaser Int)
     runPhased ph Wait (putMVar x True)
     true <- takeMVar x
     true `shouldBe` True
@@ -48,7 +53,7 @@ spec = describe "STM Phaser" $ do
   it "works twice with one Wait-mode thread" $ do
     -- Increment an MVar twice within a phaser and confirm the result
     x <- newMVar 0
-    ph <- newIntPhaser 1 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 1 :: IO (STMPhaser Int)
     runPhased ph Wait (modifyMVar_ x (\i -> return $ i + 1))
     one <- readMVar x
     one `shouldBe` 1
@@ -57,13 +62,13 @@ spec = describe "STM Phaser" $ do
     two `shouldBe` 2
 
   it "won't deadlock with a SignalWait-mode thread" $ do
-    ph <- newIntPhaser 1 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 1 :: IO (STMPhaser Int)
     runPhased ph SignalWait (return ())
 
   it "works twice with one SignalWait-mode thread" $ do
     -- Increment MVar twice and confirm the result
     x <- newMVar 0
-    ph <- newIntPhaser 1 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 1 :: IO (STMPhaser Int)
     runPhased ph SignalWait (modifyMVar_ x (\i -> return $ i + 1))
     one <- readMVar x
     one `shouldBe` 1
@@ -72,7 +77,7 @@ spec = describe "STM Phaser" $ do
     two `shouldBe` 2
 
   it "provides phase" $ do
-    ph <- newIntPhaser 1 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 1 :: IO (STMPhaser Int)
     orig_phase <- phase ph
     orig_phase `shouldBe` 0
     runPhased ph Signal (return ())
@@ -82,7 +87,7 @@ spec = describe "STM Phaser" $ do
     new_phase `shouldBe` 1
 
   it "increments phase properly" $ do
-    ph <- newIntPhaser 1 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 1 :: IO (STMPhaser Int)
     runPhased ph Signal (return ())
     new_phase <- phase ph
     new_phase `shouldBe` 1
@@ -92,7 +97,7 @@ spec = describe "STM Phaser" $ do
 
   it "permits registration while all threads exited" $ do
     -- Create a phaser with one party, then register another.
-    ph <- newIntPhaser 1 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 1 :: IO (STMPhaser Int)
     register ph
     -- Phaser should now expect two parties.
     forkIO (runPhased ph SignalWait (return ()))
@@ -103,7 +108,7 @@ spec = describe "STM Phaser" $ do
     success `shouldBe` True
 
   it "permits unregistration while all threads exited" $ do
-    ph <- newIntPhaser 2 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 2 :: IO (STMPhaser Int)
     unregister ph
     -- Phaser should now expect one party. So, two threads passing through
     -- should advance the phase twice.
@@ -113,7 +118,7 @@ spec = describe "STM Phaser" $ do
     success `shouldBe` True
 
   it "permits registration inside phaser" $ do
-    ph <- newIntPhaser 1 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 1 :: IO (STMPhaser Int)
     p <- phase ph
     p `shouldBe` 0
 
@@ -132,7 +137,7 @@ spec = describe "STM Phaser" $ do
 
   it "permits unregistration inside phaser" $ do
     -- Very similar to the "registration inside phaser" test.
-    ph <- newIntPhaser 2 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 2 :: IO (STMPhaser Int)
     p <- phase ph
     p `shouldBe` 0
 
@@ -147,25 +152,25 @@ spec = describe "STM Phaser" $ do
     p `shouldBe` 2
 
   it "gracefully handles having no registered parties" $ do
-    ph <- newIntPhaser 0 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 0 :: IO (STMPhaser Int)
     mv <- newMVar 0
     runPhased ph SignalWait (modifyMVar_ mv (\i -> return $ i + 1))
     v  <- readMVar mv
     v `shouldBe` 1
 
   it "won't deregister below 0" $ do
-    ph <- newIntPhaser 1 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 1 :: IO (STMPhaser Int)
     unregister ph
     unregister ph
     unregister ph
     register ph
-    ph <- newIntPhaser 0 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 0 :: IO (STMPhaser Int)
     runPhased ph SignalWait (return ())
     p <- phase ph
     p `shouldBe` 1
 
   it "blocks Wait-mode threads" $ do
-    ph <- newIntPhaser 2 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 2 :: IO (STMPhaser Int)
     -- Start a background thread that should not increment the phase.
     forkIO (runPhased ph Wait $ return ())
     yield
@@ -178,7 +183,7 @@ spec = describe "STM Phaser" $ do
     phase_updated `shouldBe` True
 
   it "blocks SigWait-mode threads" $ do
-    ph <- newIntPhaser 2 :: IO (STMPhaser Int)
+    ph <- implNewIntPhaser 2 :: IO (STMPhaser Int)
     -- Start a background thread that should not increment the phase.
     forkIO (runPhased ph SignalWait $ return ())
     yield
@@ -197,8 +202,8 @@ spec = describe "STM Phaser" $ do
        If we don't order the signal and wait correctly in `runMultiPhased`, this
        would deadlock.
     -}
-    ph1 <- newIntPhaser 2 :: IO (STMPhaser Int)
-    ph2 <- newIntPhaser 2 :: IO (STMPhaser Int)
+    ph1 <- implNewIntPhaser 2 :: IO (STMPhaser Int)
+    ph2 <- implNewIntPhaser 2 :: IO (STMPhaser Int)
     forkIO (runMultiPhased [(ph1, Signal), (ph2, Wait)  ] $ return ())
     runMultiPhased         [(ph1, Wait),   (ph2, Signal)] $ return ()
     phase1_updated <- reattemptFor 0.1 ((==) <$> phase ph1 <*> return 1)

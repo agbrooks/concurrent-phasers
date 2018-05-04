@@ -17,6 +17,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Control.Concurrent.Phaser
+                     , Control.Concurrent.Phaser.STM
                      , Control.Concurrent.Phaser.Generic
   --other-modules:       Control.Concurrent.Phaser.Internal
   --other-extensions:    
