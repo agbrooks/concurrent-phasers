@@ -2,3 +2,4 @@
 .dir-locals.el
 **/*.i
 **/*.o
+dist/**
