@@ -1,4 +1,4 @@
-{-# LANGUAGE MultiWayIf   #-}
+{-# LANGUAGE MultiWayIf #-}
 module Control.Concurrent.Phaser
   ( Phaser   ()
   , IOPhaser ()
@@ -41,7 +41,7 @@ instance Phaser IOPhaser where
   batchRegister = batchRegister_
   phase         = phase_
 
--- Create a new @IOPhaser@.
+-- | Create a new @IOPhaser@.
 newPhaser_
   :: Enum p
   => p   -- ^ Starting phase for the @Phaser@.
@@ -88,7 +88,7 @@ enterInMode_ :: IOPhaser p -> PhaserMode -> IO ()
 enterInMode_ p m = do
   -- Adjust for new parties registered or unregistered
   entered    <- takeMVar (_entered p)
-  when (entered == 0) $  updateRegistered p
+  when (entered == 0) $  updateRegistered p --update registration total once new phase starts
                       >> resetSigWaitRegistered p
   registered <- readIORef (_registered p)
 
@@ -129,7 +129,7 @@ signal_ p = do
       unblockWaits () = putMVar (_wait_fin p) 0
   if | is_last_signal && no_waits -> advance p
      | is_last_signal             -> unblockWaits ()
-     | otherwise                  -> putMVar (_sig_rx p) (s_rx + 1)
+     | otherwise -> putMVar (_sig_rx p) (s_rx + 1)
 
 -- Increase the phase to its successor.
 nextPhase :: Enum p => IOPhaser p -> IO ()
@@ -137,4 +137,6 @@ nextPhase p = atomicModifyIORef' (_phase p) (\h -> (succ h, ()))
 
 -- Move on to the next phase and permit entry into the phaser.
 advance :: Enum p => IOPhaser p -> IO ()
-advance p = nextPhase p >> putMVar (_entered p) 0
+advance p
+  =  nextPhase p
+  >> putMVar (_entered p) 0

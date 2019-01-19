@@ -19,8 +19,6 @@ library
   exposed-modules:     Control.Concurrent.Phaser
                      , Control.Concurrent.Phaser.STM
                      , Control.Concurrent.Phaser.Generic
-  --other-modules:       Control.Concurrent.Phaser.Internal
-  --other-extensions:    
   build-depends:       base >= 4.9 && < 5.0
                      , stm  >= 2.4 && < 3.0
   hs-source-dirs:      src
@@ -37,6 +35,7 @@ test-suite phaser-test
                   , time
                   , QuickCheck
   ghc-options: -O1 -threaded -rtsopts -with-rtsopts=-N
+  other-modules: Control.Concurrent.PhaserSpec
   default-language: Haskell2010
 
 source-repository head
