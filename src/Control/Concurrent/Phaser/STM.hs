@@ -1,4 +1,7 @@
 {-# LANGUAGE MultiWayIf   #-}
+{- |STM-based `Phaser` implementation offered as an alternative to
+    the MVar-based `'Control.Concurrent.Phaser.IOPhaser`.
+-}
 module Control.Concurrent.Phaser.STM
   ( Phaser    ()
   , STMPhaser ()
@@ -20,7 +23,7 @@ import Control.Concurrent.Phaser.Generic
 import Control.Concurrent.STM
 import Control.Monad           ( when )
 
--- | STM-based @Phaser@ implementation.
+-- | STM-based `Phaser`.
 data STMPhaser p = STMPhaser
   { _phase       :: TVar p   -- Phase of the phaser.
   , _registered  :: TVar Int -- Parties registered on the phaser.
@@ -41,10 +44,10 @@ instance Phaser STMPhaser where
   batchRegister = batchRegister_
   phase         = phase_
 
--- Create a new @STMPhaser@.
+-- Create a new `STMPhaser`.
 newPhaser_
   :: Enum p
-  => p   -- ^ Starting phase for the @Phaser@.
+  => p   -- ^ Starting phase for the `Phaser`.
   -> Int -- ^ Number of parties to expect for first round.
   -> IO (STMPhaser p)
 newPhaser_ p parties =
@@ -58,15 +61,15 @@ newPhaser_ p parties =
             <*> newTVar  0
             <*> newTMVar 0 -- Number entered. Zero for now.
 
--- | Specialized constructor for a @STMPhaser@.
+-- | Specialized constructor for a `STMPhaser`.
 newSTMPhaser :: Enum p => p -> Int -> IO (STMPhaser p)
 newSTMPhaser = newPhaser_
 
--- | Retrieve a @STMPhaser@'s current phase.
+-- | Retrieve a `STMPhaser`'s current phase.
 phase_ :: STMPhaser p -> IO p
 phase_ = atomically . readTVar . _phase
 
--- | Register several parties on a @STMPhaser@.
+-- | Register several parties on a `STMPhaser`.
 batchRegister_ :: STMPhaser p -> Int -> IO ()
 batchRegister_ p i =
   atomically $ modifyTVar (_registered' p)

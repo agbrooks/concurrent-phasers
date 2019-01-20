@@ -1,4 +1,6 @@
 {-# LANGUAGE MultiWayIf #-}
+{-| Default, `MVar`-based `Phaser` implementation (`IOPhaser`).
+-}
 module Control.Concurrent.Phaser
   ( Phaser   ()
   , IOPhaser ()
@@ -21,7 +23,7 @@ import Control.Concurrent.MVar
 import Control.Monad           ( when )
 import Data.IORef
 
--- | MVar / IORef-based @Phaser@ implementation.
+-- | MVar / IORef-based 'Phaser' implementation.
 data IOPhaser p = IOPhaser
   { _phase       :: IORef p   -- Phase of the phaser.
   , _registered  :: IORef Int -- Parties registered on the phaser.
@@ -41,10 +43,10 @@ instance Phaser IOPhaser where
   batchRegister = batchRegister_
   phase         = phase_
 
--- | Create a new @IOPhaser@.
+-- | Create a new 'IOPhaser'.
 newPhaser_
   :: Enum p
-  => p   -- ^ Starting phase for the @Phaser@.
+  => p   -- ^ Starting phase for the 'Phaser'.
   -> Int -- ^ Number of parties to expect for first round.
   -> IO (IOPhaser p)
 newPhaser_ p parties =
@@ -83,7 +85,7 @@ resetSigWaitRegistered p =
   writeIORef (_wait_reg p) 0
 
 -- Enter the phaser in a given mode.
--- TODO: Exception-safety?
+-- TODO: work on async exception safety
 enterInMode_ :: IOPhaser p -> PhaserMode -> IO ()
 enterInMode_ p m = do
   -- Adjust for new parties registered or unregistered
@@ -110,7 +112,7 @@ finishEntry p = do
   if | sig_reg == 0 -> putMVar (_wait_fin p) 0
      | otherwise    -> putMVar (_sig_rx   p) 0
 
--- TODO: Exception-safety?
+-- TODO: work on async exception safety
 wait_ :: Enum p => IOPhaser p -> IO ()
 wait_ p = do
   w_fin <- takeMVar  (_wait_fin p)
@@ -118,7 +120,7 @@ wait_ p = do
   if | w_reg <= (w_fin + 1) -> advance p
      | otherwise -> putMVar (_wait_fin p) (w_fin + 1)
 
--- TODO: Exception safety?
+-- TODO: work on async exception safety
 signal_ :: Enum p => IOPhaser p -> IO ()
 signal_ p = do
   s_rx  <- takeMVar   (_sig_rx   p)
