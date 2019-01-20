@@ -3,7 +3,7 @@
 This package is a Haskell implementation of the "Phaser," a barrier-like 
 synchronization object. Its construction and behavior is inspired
 by the object of the same name that is part of the 
-[Habanero Project](https://habenero.rice.edu).
+[Habanero Project](https://habanero.rice.edu).
 
 # What's a Phaser?
 
@@ -31,7 +31,7 @@ This package includes both an `MVar`-based implementation (`IOPhaser`) and a `ST
 
 ### Creation
 
-A `Phaser` is declared with a 'phase' and initial number of threads that will use it:
+A `Phaser` is declared with a 'phase' and initial number of threads/parties that will use it:
 ```haskell
 ph <- newIOPhaser 0 4 -- Starting with phase 0, 4 parties.
 ```
@@ -55,9 +55,6 @@ runMultiPhased [(ph1, Signal), (ph2, Wait)] $ do
 ```
 
 Any barrier-like blocking occurs _after_ the the action specified on the phaser has been run.
-
-In the case of `runMultiPhased`, we may signal or wait at phasers in an order 
-different than the one specified in order to avoid deadlock.
 
 # vs. Java Phasers
 
