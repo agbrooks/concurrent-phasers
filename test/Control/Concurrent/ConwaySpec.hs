@@ -1,3 +1,20 @@
+{-
+This is a stress test of the Phasers that computes a certain generation of
+a game of Conway's Game of Life in parallel. The parallelism is very
+fine-grained (after all, this is a stress test) -- one process is responsible
+for each square in the grid.
+
+There are two "board-shaped" grids of IORefs used. With each generation,
+every cell alternates between using one for reading and the other for
+writing.
+
+Additionally, there is one "board-shaped" grid of Phasers used for
+synchronization. Because each cell depends on the last generation computed
+by its neighbors, it uses the phasers at its neighbors' positions in 'Wait' mode,
+waiting on their results. Each process uses the phaser in its own position in
+'Signal' mode to unblock any processes waiting on its result.
+
+-}
 module Control.Concurrent.ConwaySpec
   ( spec
   , main )
@@ -9,7 +26,6 @@ import Control.Concurrent.Phaser.STM
 import Control.Monad
 
 import Data.IORef
-import Data.List
 
 import Test.Hspec
 
@@ -21,7 +37,6 @@ spec =  makeSpecForPhaser (newSTMPhaser (0::Int)) "STM Phaser"
      >> makeSpecForPhaser (newIOPhaser  (0::Int)) "IOPhaser"
 
 
-type Cell = IORef Bool
 type Cells = [[IORef Bool]]
 type PhaserGrid p = [[p Int]]
 
@@ -36,7 +51,7 @@ just for a test, or do something as tedious and unsafe as an array.
 makeBoard :: Int -> IO Cells
 makeBoard size = replicateM size $ replicateM size (newIORef False)
 
-makePhaserBoard :: Phaser p => Int -> (Int -> IO (p Int)) -> IO PhaserGrid
+makePhaserBoard :: Phaser p => Int -> (Int -> IO (p Int)) -> IO (PhaserGrid p)
 makePhaserBoard size newPhaserImpl =
   replicateM size $ replicateM size (newPhaserImpl 9)
 
@@ -53,9 +68,9 @@ cell (row, col) size board = (board !! (row `mod` size)) !! (col `mod` size)
 setGlider :: Cells -> Int -> IO ()
 setGlider cells size =
   let
-    setCell coord = writeIORef' (cell coord size cells) True
-    gliderCoords = [(0,0), (1,0), (2,0), (0,1) (1, 2)]
-  in sequence $ setCell <$> gliderCoords
+    setCell coord = writeIORef (cell coord size cells) True
+    gliderCoords = [(0,0), (1,0), (2,0), (0,1), (1, 2)]
+  in sequence_ $ setCell <$> gliderCoords
 
 neighbors :: (Int, Int) -> Int -> [[a]] -> [a]
 neighbors (row, col) size board =
@@ -63,39 +78,42 @@ neighbors (row, col) size board =
   in (\[i,j] -> cell (row + i, col + j) size board) <$> offsets
 
 nextState :: Bool -> [Bool] -> Bool
-nextState this neighbors
-  let aliveSurrounding = length (filter id neighbors)
-      compute c
+nextState this nbrs =
+  let aliveSurrounding = length (filter id nbrs)
+      computeNext c
         | aliveSurrounding <  2 = False
         | aliveSurrounding == 3 = True
         | aliveSurrounding == 4 = c
         | otherwise = False
+  in computeNext this
 
+runConway :: Phaser p => (Int -> IO (p Int)) -> Int -> Int -> IO [[Bool]]
 runConway newPhaserImpl size gen =
   let
-    coords = replicateM 2 [0..(size - 1)]
+    coords = replicateM 2 [0..(size - 1)] >>= \[i,j] -> [(i,j)]
   in do
-    -- phaser to block all parties until they've finished
-    donePh <- newPhaserImpl (size ^ size)
+    -- phaser used as a barrier to make sure all parties have finished
+    donePh <- newPhaserImpl (size ^ size + 1)
     -- set up the cell grids
     phaserGrid <- makePhaserBoard size newPhaserImpl
     oddGrid  <- makeBoard size
     evenGrid <- makeBoard size
-    setGlider evenGrid
+    setGlider evenGrid size
 
     -- compute
-    forM coords (
+    forM_ coords (
       \coord ->
         let oddCell  = cell coord size oddGrid
             evenCell = cell coord size evenGrid
             thisPh   = cell coord size phaserGrid
 
             nbrPhs   = neighbors coord size phaserGrid
-            nbrPairs = TODO
+            nbrPairs = map (\p -> (p, Wait)) nbrPhs
             oddNbrs  = neighbors coord size oddGrid
             evenNbrs = neighbors coord size evenGrid
-        in forkIO (replicateM gen $ do
-             runMultiPhased (thisPh, Signal):nbrPairs $ do
+        in forkIO (replicateM_ gen $ do
+             -- Run phased signalling on own phaser, waiting on neighbors
+             runMultiPhased ((thisPh, Signal):nbrPairs) $ do
                curPhase <- phase thisPh
                let evenPhase = (curPhase `mod` 2) == 0
                    readCells
@@ -104,23 +122,30 @@ runConway newPhaserImpl size gen =
                    writeCell
                      | evenPhase = oddCell
                      | otherwise = evenCell
+                   thisCell
+                     | evenPhase = evenCell
+                     | otherwise = oddCell
 
-                   -- TODO: READ THE IOREFS
-                   -- TODO: FIND THE NEXT VALUE
-                   -- TODO: UPDATE THE CELL
-                   
-                x <- undefined
+               nbrVals <- sequence $ readIORef <$> readCells
+               thisVal <- readIORef thisCell
+               writeIORef writeCell (nextState thisVal nbrVals)
 
-             -- Done!
+             -- Done with all iterations!
              runPhased donePh SignalWait (return ())
            )
-    )
+     )
+    -- wait for all spawned threads to exit
     runPhased donePh Wait $ do
-      undefined -- TODO
+      let
+        genEven = gen `mod` 2 == 0
+        finalGrid
+            | genEven   = evenGrid
+            | otherwise = oddGrid
+      extractBoard finalGrid
 
-
-
-makeSpecForPhaser implNewIntPhaser name = describe name $ do
-  -- TODO fill out the placeholder test to make sure that the conway test is correct.
+makeSpecForPhaser implNewIntPhaser name = describe name $
   it "produces correct output for the game of life demo" $ do
-    1 `shouldBe` 1
+    board <- runConway implNewIntPhaser 10 100
+    -- TODO specify correct result -- but with one implementation deadlocking,
+    -- we have more pressing concerns.
+    board `shouldBe` []
