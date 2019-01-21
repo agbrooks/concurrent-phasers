@@ -15,7 +15,7 @@ make test # 'stack test' works too
 
 Currently, there are two sets of tests -- one ([`PhaserSpec`](test/Control/Concurrent/PhaserSpec.hs)) 
 is a test of basic properties of the `Phaser`s. The other, 
-(([`ConwaySpec`](test/Control/Concurrent/ConwaySpec.hs)) is a stress-test that is designed to 
+([`ConwaySpec`](test/Control/Concurrent/ConwaySpec.hs)) is a stress-test that is designed to 
 coax misbehavior or hard-to-find race conditions from the `Phaser`s by computing a certain 
 generation of a game of Conway's Game of Life in parallel.
 
