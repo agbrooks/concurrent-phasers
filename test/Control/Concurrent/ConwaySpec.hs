@@ -82,8 +82,8 @@ nextState this nbrs =
   let aliveSurrounding = length (filter id nbrs)
       computeNext c
         | aliveSurrounding <  2 = False
+        | aliveSurrounding == 2 = c
         | aliveSurrounding == 3 = True
-        | aliveSurrounding == 4 = c
         | otherwise = False
   in computeNext this
 
