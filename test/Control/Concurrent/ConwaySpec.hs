@@ -33,8 +33,8 @@ main :: IO ()
 main = hspec spec
 
 spec :: Spec
-spec =  makeSpecForPhaser (newSTMPhaser (0::Int)) "STM Phaser"
-     >> makeSpecForPhaser (newIOPhaser  (0::Int)) "IOPhaser"
+spec = makeSpecForPhaser (newIOPhaser  (0::Int)) "IO Phaser"
+    >> makeSpecForPhaser (newSTMPhaser (0::Int)) "STM Phaser"
 
 
 type Cells = [[IORef Bool]]
@@ -68,7 +68,7 @@ cell (row, col) size board = (board !! (row `mod` size)) !! (col `mod` size)
 setGlider :: Cells -> Int -> IO ()
 setGlider cells size =
   let
-    setCell coord = writeIORef (cell coord size cells) True
+    setCell coord = atomicWriteIORef (cell coord size cells) True
     gliderCoords = [(0,0), (1,0), (2,0), (0,1), (1, 2)]
   in sequence_ $ setCell <$> gliderCoords
 
@@ -93,7 +93,7 @@ runConway newPhaserImpl size gen =
     coords = replicateM 2 [0..(size - 1)] >>= \[i,j] -> [(i,j)]
   in do
     -- phaser used as a barrier to make sure all parties have finished
-    donePh <- newPhaserImpl (size ^ size + 1)
+    donePh <- newPhaserImpl (size ^ 2 + 1)
     -- set up the cell grids
     phaserGrid <- makePhaserBoard size newPhaserImpl
     oddGrid  <- makeBoard size
@@ -111,7 +111,7 @@ runConway newPhaserImpl size gen =
             nbrPairs = map (\p -> (p, Wait)) nbrPhs
             oddNbrs  = neighbors coord size oddGrid
             evenNbrs = neighbors coord size evenGrid
-        in forkIO (replicateM_ gen $ do
+        in forkIO ((replicateM_ gen $ do
              -- Run phased signalling on own phaser, waiting on neighbors
              runMultiPhased ((thisPh, Signal):nbrPairs) $ do
                curPhase <- phase thisPh
@@ -128,20 +128,17 @@ runConway newPhaserImpl size gen =
 
                nbrVals <- sequence $ readIORef <$> readCells
                thisVal <- readIORef thisCell
-               writeIORef writeCell (nextState thisVal nbrVals)
-
-             -- Done with all iterations!
-             runPhased donePh SignalWait (return ())
-           )
+               atomicWriteIORef writeCell (nextState thisVal nbrVals)
+           ) >> runPhased donePh Signal (return ()))
      )
     -- wait for all spawned threads to exit
-    runPhased donePh Wait $ do
-      let
+    runPhased donePh Wait $ (return ())
+    let
         genEven = gen `mod` 2 == 0
         finalGrid
             | genEven   = evenGrid
             | otherwise = oddGrid
-      extractBoard finalGrid
+    extractBoard finalGrid
 
 makeSpecForPhaser implNewIntPhaser name = describe name $
   it "produces correct output for the game of life demo" $ do
