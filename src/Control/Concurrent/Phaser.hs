@@ -96,8 +96,8 @@ enterInMode_ p m = do
 
   -- Adjust signal / wait registration. These modifyIORefs are effectively
   -- atomic, since they are locked on _entered p.
-  when (modeSignals m) $ modifyIORef' (_sig_reg  p) (\r -> r + 1)
-  when (modeWaits   m) $ modifyIORef' (_wait_reg p) (\r -> r + 1)
+  when (modeSignals m) $ modifyIORef' (_sig_reg  p) (+ 1)
+  when (modeWaits   m) $ modifyIORef' (_wait_reg p) (+ 1)
 
   -- If all expected parties arrived, unblock their exit.
   if entered + 1 >= registered then finishEntry p

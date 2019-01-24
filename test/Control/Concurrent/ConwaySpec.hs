@@ -142,7 +142,12 @@ runConway newPhaserImpl size gen =
 
 makeSpecForPhaser implNewIntPhaser name = describe name $
   it "produces correct output for the game of life demo" $ do
-    board <- runConway implNewIntPhaser 10 100
-    -- TODO specify correct result -- but with one implementation deadlocking,
-    -- we have more pressing concerns.
-    board `shouldBe` []
+    let size = 5
+    board <- runConway implNewIntPhaser size 150
+    -- Since we initialized it with a glider, the result should also be the
+    -- glider, but transposed somewhere different on the torus
+    board `shouldBe` [[False, False, False, True , False],
+                      [False, False, False, False, False],
+                      [False, False, False, False, False],
+                      [False, False, True , True , True ],
+                      [False, False, True , False, False]]
